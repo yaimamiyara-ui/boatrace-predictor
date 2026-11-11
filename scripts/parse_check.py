@@ -52,6 +52,25 @@ def main() -> None:
         print(f"[K] parsed_boats={len(boats)} parsed_races={len(pays)}")
         print(f"[K] races_with_trifecta={sum(1 for x in pays if x.trifecta_comb)}")
         print(f"[K] races_with_weather={len({x.race_id for x in boats if x.weather})}")
+        # 艇数が6でないレース・3連単のないレースの生の行を表示
+        from collections import Counter
+        cnt = Counter(x.race_id for x in boats)
+        odd = [p.race_id for p in pays if cnt.get(p.race_id, 0) != 6 or not p.trifecta_comb]
+        print(f"[K] odd_races={len(odd)} {odd[:10]}")
+        if odd:
+            import re
+            lines = k.splitlines()
+            for target in odd[:4]:
+                v, r = target.split("_")[1], int(target.split("_")[2])
+                venue = None
+                for i, l in enumerate(lines):
+                    n = unicodedata.normalize("NFKC", l).strip()
+                    if re.match(r"^\d{2}KBGN", n):
+                        venue = n[:2]
+                    if venue == v and re.match(rf"^{r}R\s+.*H\d{{4}}m", n):
+                        for l2 in lines[i:i + 20]:
+                            print(f"  ODD[{target}]|{l2}")
+                        break
         for x in boats[:3]:
             print("  K-SAMPLE|" + x.model_dump_json())
         for x in pays[:2]:
