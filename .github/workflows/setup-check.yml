@@ -1,0 +1,41 @@
+name: setup-check
+
+# 接続確認用（手動実行）。Googleドライブとの読み書き、Discord通知を確認する。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install rclone
+        run: curl -fsSL https://rclone.org/install.sh | sudo bash
+
+      - name: Restore rclone config
+        env:
+          RCLONE_CONFIG_BODY: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          mkdir -p ~/.config/rclone
+          printf '%s\n' "$RCLONE_CONFIG_BODY" > ~/.config/rclone/rclone.conf
+          chmod 600 ~/.config/rclone/rclone.conf
+
+      - name: Google Drive read/write test
+        run: |
+          rclone mkdir gdrive:boatrace-predictor/data
+          echo "setup-check $(date -u +%Y-%m-%dT%H:%M:%SZ)" > check.txt
+          rclone copyto check.txt gdrive:boatrace-predictor/setup-check.txt
+          rclone cat gdrive:boatrace-predictor/setup-check.txt > /dev/null
+          echo "Google Drive OK"
+
+      - name: Discord test
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          curl -fsS -H "Content-Type: application/json" \
+            -d '{"content":"GitHub Actions から接続テスト成功（Googleドライブ・Discord）"}' \
+            "$DISCORD_WEBHOOK_URL" > /dev/null
+          echo "Discord OK"
