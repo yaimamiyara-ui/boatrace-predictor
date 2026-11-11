@@ -1,0 +1,59 @@
+name: Daily Fetch Official Files
+
+on:
+  schedule:
+    # 毎日 23:30 JST (14:30 UTC) に実行
+    - cron: "30 14 * * *"
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: "対象日 (YYYY-MM-DD、空欄時はJST前日)"
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  group: gdrive-parquet-write
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  daily-fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+          pip install -r requirements.txt
+
+      - name: Install and configure rclone
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          curl -fsSL https://rclone.org/install.sh | sudo bash
+          mkdir -p ~/.config/rclone
+          printf "%s\n" "$RCLONE_CONFIG_CONTENT" > ~/.config/rclone/rclone.conf
+          chmod 600 ~/.config/rclone/rclone.conf
+
+      - name: Run daily fetch
+        env:
+          TARGET_DATE: ${{ inputs.target_date }}
+        run: |
+          if [ -n "$TARGET_DATE" ]; then
+            python scripts/daily_fetch.py --target-date "$TARGET_DATE"
+          else
+            python scripts/daily_fetch.py
+          fi
