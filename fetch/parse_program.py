@@ -69,10 +69,11 @@ def parse_program_text(raw_text: str, target_date: date) -> List[ProgramBoatReco
         if current_race_no is None:
             continue
 
-        # 艇行判定 (NFKC正規化後の文字列でマッチング)
-        m_boat = BOAT_LINE_RE.match(norm_line)
-        if m_boat:
-            boat_no = int(m_boat.group(1))
+        # 艇行判定：Shift-JISのバイト位置で切り出す（固定長）。
+        # 実ファイル確認（2026-11-10）で「モーター2連率」と「ボート番号」が
+        # 空白なしで連結される行（例: 36.52106）があったため、正規表現ではなく桁位置で読む。
+        fields = _slice_boat_line(line)
+        if fields:
             race_id = f"{date_compact}_{current_venue}_{current_race_no:02d}"
             records.append(
                 ProgramBoatRecord(
@@ -82,21 +83,67 @@ def parse_program_text(raw_text: str, target_date: date) -> List[ProgramBoatReco
                     race_no=current_race_no,
                     race_title=current_title,
                     distance=current_distance,
-                    boat_no=boat_no,
-                    racer_id=int(m_boat.group(2)),
-                    age=int(m_boat.group(3)),
-                    branch=m_boat.group(4),
-                    weight=float(m_boat.group(5)),
-                    grade=m_boat.group(6),
-                    nat_win_rate=float(m_boat.group(7)),
-                    nat_2ren_rate=float(m_boat.group(8)),
-                    loc_win_rate=float(m_boat.group(9)),
-                    loc_2ren_rate=float(m_boat.group(10)),
-                    motor_no=int(m_boat.group(11)),
-                    motor_2ren_rate=float(m_boat.group(12)),
-                    boat_num=int(m_boat.group(13)),
-                    boat_2ren_rate=float(m_boat.group(14)),
+                    **fields,
                 )
             )
 
     return records
+
+
+# Bファイル艇行のバイト位置（cp932）。実ファイルで確認済み:
+# "1 3876中辻崇人49福岡52A1 7.22 57.78 8.37 78.43 21 36.52106 25.87"
+_B_COLS = {
+    "boat_no": (0, 1),
+    "racer_id": (2, 6),
+    "name": (6, 14),
+    "age": (14, 16),
+    "branch": (16, 20),
+    "weight": (20, 22),
+    "grade": (22, 24),
+    "nat_win_rate": (24, 29),
+    "nat_2ren_rate": (29, 35),
+    "loc_win_rate": (35, 40),
+    "loc_2ren_rate": (40, 46),
+    "motor_no": (46, 49),
+    "motor_2ren_rate": (49, 55),
+    "boat_num": (55, 58),
+    "boat_2ren_rate": (58, 64),
+}
+
+
+def _slice_boat_line(line: str):
+    """艇行なら各項目のdictを返す。艇行でなければNone"""
+    try:
+        b = line.encode("cp932")
+    except UnicodeEncodeError:
+        return None
+    if len(b) < 64 or b[0:1] not in (b"1", b"2", b"3", b"4", b"5", b"6") or b[1:2] != b" ":
+        return None
+
+    def col(key: str) -> str:
+        s, e = _B_COLS[key]
+        return b[s:e].decode("cp932", errors="replace").strip()
+
+    try:
+        racer_id = col("racer_id")
+        grade = col("grade")
+        if not (racer_id.isdigit() and len(racer_id) == 4 and grade in ("A1", "A2", "B1", "B2")):
+            return None
+        return dict(
+            boat_no=int(col("boat_no")),
+            racer_id=int(racer_id),
+            age=int(col("age")),
+            branch=unicodedata.normalize("NFKC", col("branch")).replace(" ", ""),
+            weight=float(col("weight")),
+            grade=grade,
+            nat_win_rate=float(col("nat_win_rate")),
+            nat_2ren_rate=float(col("nat_2ren_rate")),
+            loc_win_rate=float(col("loc_win_rate")),
+            loc_2ren_rate=float(col("loc_2ren_rate")),
+            motor_no=int(col("motor_no")),
+            motor_2ren_rate=float(col("motor_2ren_rate")),
+            boat_num=int(col("boat_num")),
+            boat_2ren_rate=float(col("boat_2ren_rate")),
+        )
+    except ValueError:
+        return None

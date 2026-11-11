@@ -166,6 +166,12 @@ def parse_results_text(
         if current_race_no is None or current_payout is None:
             continue
 
+        # 決まり手：実ファイルでは列見出し行の末尾にある
+        # 例（NFKC後）: "着 艇 登番 選 手 名 モーター ボート 展示 進入 スタートタイミング レースタイム 逃げ"
+        if "レースタイム" in norm_line:
+            current_trick = norm_line.split("レースタイム", 1)[1].strip()
+            continue
+
         # 決まり手行 (例: "決まり手 逃げ")
         if "決まり手" in norm_line:
             parts = norm_line.split("決まり手")

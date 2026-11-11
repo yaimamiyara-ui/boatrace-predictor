@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from fetch.official_files import download_and_extract_lzh
-from fetch.parse_program import parse_program_text, BOAT_LINE_RE
+from fetch.parse_program import parse_program_text, _slice_boat_line
 from fetch.parse_results import parse_results_text
 
 
@@ -37,7 +37,7 @@ def main() -> None:
         miss = [
             l for l in b.splitlines()
             if unicodedata.normalize("NFKC", l)[:2].strip() in list("123456")
-            and not BOAT_LINE_RE.match(unicodedata.normalize("NFKC", l))
+            and l[1:2] == " " and _slice_boat_line(l) is None
         ]
         print(f"[B] unmatched_boat_like_lines={len(miss)}")
         for l in miss[:10]:
