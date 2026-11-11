@@ -15,7 +15,7 @@ RACE_WEATHER_RE = re.compile(
 # 例: " 01 1 4320 峰 竜太 12 34 6.75 1 0.12 1.48.5"
 # TODO: 要確認 - 欠場・失格時に展示タイムや進入コース、STが空欄になる場合のトークン構成
 RESULT_BOAT_RE = re.compile(
-    r"^\s*(0[1-6]|[FLKS]\d?)\s+"     # 1: 着順コード
+    r"^\s*(0[0-6]|[FLKS]\d?)\s+"     # 1: 着順コード（00=不成立時など）
     r"([1-6])\s+"                    # 2: 艇番
     r"(\d{4})\s+"                    # 3: 登録番号
     r".+?\s+"                        # 選手名
@@ -166,6 +166,11 @@ def parse_results_text(
         if current_race_no is None or current_payout is None:
             continue
 
+        # レース不成立（例: 5艇フライング）
+        if "不成立" in norm_line or "中止" in norm_line:
+            current_payout.is_aborted = True
+            continue
+
         # 決まり手：実ファイルでは列見出し行の末尾にある
         # 例（NFKC後）: "着 艇 登番 選 手 名 モーター ボート 展示 進入 スタートタイミング レースタイム 逃げ"
         if "レースタイム" in norm_line:
@@ -199,7 +204,7 @@ def parse_results_text(
             st_raw = m_boat.group(8)
             st_time, st_status = _parse_st(st_raw, finish_code)
 
-            finish_order = int(finish_code) if finish_code.isdigit() else None
+            finish_order = int(finish_code) if (finish_code.isdigit() and finish_code != "00") else None
             race_time_sec = _parse_race_time(m_boat.group(9))
 
             race_id = f"{date_compact}_{current_venue}_{current_race_no:02d}"
