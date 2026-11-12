@@ -1,0 +1,42 @@
+name: Train v1
+
+# 学習モデルv1の学習と検証（手動実行）。学習期間 3年・5年・10年・全期間 を同じテスト期間で比べる。
+on:
+  workflow_dispatch:
+    inputs:
+      windows:
+        description: "学習期間のパターン（カンマ区切り）"
+        required: true
+        default: "3y,5y,10y,all"
+      valid_start:
+        description: "検証の開始日"
+        required: true
+        default: "2025-05-01"
+      test_start:
+        description: "テストの開始日"
+        required: true
+        default: "2025-11-01"
+      test_end:
+        description: "テストの終了日"
+        required: true
+        default: "2026-11-10"
+
+permissions:
+  contents: read
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          rclone_config: ${{ secrets.RCLONE_CONFIG }}
+      - name: Train and evaluate
+        env:
+          WINDOWS: ${{ inputs.windows }}
+          VALID_START: ${{ inputs.valid_start }}
+          TEST_START: ${{ inputs.test_start }}
+          TEST_END: ${{ inputs.test_end }}
+        run: python scripts/train_v1.py --windows "$WINDOWS" --valid-start "$VALID_START" --test-start "$TEST_START" --test-end "$TEST_END"

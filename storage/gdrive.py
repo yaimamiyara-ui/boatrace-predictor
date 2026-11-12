@@ -63,14 +63,14 @@ def sync_category(category: str, years: list[int] | None = None) -> Path:
     return local
 
 
-def read_category(category: str, start: str, end: str) -> pd.DataFrame:
+def read_category(category: str, start: str, end: str, columns: list[str] | None = None) -> pd.DataFrame:
     """cache/{category} から date が start〜end（YYYY-MM-DD、両端含む）の行を読む。先に sync_category を呼ぶこと"""
     local = CACHE_DIR / category
     files = sorted(local.glob("*/*.parquet"))
     keep = [f for f in files if start[:7] <= f.stem <= end[:7]]
     if not keep:
         return pd.DataFrame()
-    df = pd.concat([pd.read_parquet(f) for f in keep], ignore_index=True)
+    df = pd.concat([pd.read_parquet(f, columns=columns) for f in keep], ignore_index=True)
     return df[(df["date"] >= start) & (df["date"] <= end)].reset_index(drop=True)
 
 
