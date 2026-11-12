@@ -1,0 +1,33 @@
+name: Scheduler
+
+# 時計役。GitHubの定時起動（schedule）がこのリポジトリで動かないため、
+# このジョブが時刻を見て各ワークフローを呼び出し、約5時間40分ごとに次の時計役へ交代する。
+# 止まった場合は Actions 画面からこのワークフローを手動実行すれば再開する。
+on:
+  workflow_dispatch:
+  schedule:
+    # 定時起動が使えるようになった場合の保険（時計役が止まっていたら毎日7:05に再開）
+    - cron: "5 22 * * *"
+
+concurrency:
+  group: scheduler
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  clock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - name: Run scheduler
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/scheduler.py
