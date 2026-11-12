@@ -1,0 +1,61 @@
+name: Live Record
+
+# 当日データの記録。
+#  - 07:41 JST : 開催場と締切時刻（schedule）
+#  - 08:03〜23:53 JST の10分おき : 締切3〜25分前のレースの3連単オッズと直前情報（prerace）
+#  - 00:21 JST : 前日の全レースの確定3連単オッズ（final）
+on:
+  schedule:
+    - cron: "41 22 * * *"
+    - cron: "3,13,23,33,43,53 23,0-14 * * *"
+    - cron: "21 15 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "schedule / prerace / final"
+        required: true
+        default: "prerace"
+      date:
+        description: "対象日 YYYY-MM-DD（空欄で自動）"
+        required: false
+        default: ""
+
+concurrency:
+  group: live-record
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          rclone_config: ${{ secrets.RCLONE_CONFIG }}
+      - name: Decide mode
+        id: mode
+        env:
+          EVENT: ${{ github.event_name }}
+          SCHED: ${{ github.event.schedule }}
+          IN_MODE: ${{ inputs.mode }}
+          IN_DATE: ${{ inputs.date }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "mode=$IN_MODE" >> "$GITHUB_OUTPUT"; echo "date=$IN_DATE" >> "$GITHUB_OUTPUT"
+          elif [ "$SCHED" = "41 22 * * *" ]; then
+            echo "mode=schedule" >> "$GITHUB_OUTPUT"; echo "date=" >> "$GITHUB_OUTPUT"
+          elif [ "$SCHED" = "21 15 * * *" ]; then
+            echo "mode=final" >> "$GITHUB_OUTPUT"; echo "date=$(TZ=Asia/Tokyo date -d yesterday +%F)" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=prerace" >> "$GITHUB_OUTPUT"; echo "date=" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Record
+        env:
+          MODE: ${{ steps.mode.outputs.mode }}
+          DAY: ${{ steps.mode.outputs.date }}
+        run: |
+          if [ -n "$DAY" ]; then python scripts/live_record.py "$MODE" --date "$DAY"; else python scripts/live_record.py "$MODE"; fi
