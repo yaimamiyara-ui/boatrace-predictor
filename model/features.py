@@ -26,7 +26,8 @@ FEATURES = (
      "cw",
      "r180_n", "r180_win", "r180_top2", "r180_top3", "r180_st", "r180_f",
      "r30_n", "r30_win", "r30_top3",
-     "lane365_n", "lane365_win", "lane365_top2"]
+     "lane365_n", "lane365_win", "lane365_top2",
+     "inner_st_diff", "inner_win_diff", "boat1_nat_win", "boat1_r180_st"]
     + [f"{c}_diff" for c in RELATIVE] + [f"{c}_rank" for c in RELATIVE]
 )
 CATEGORICAL = ["venue"]
@@ -97,28 +98,37 @@ def build(program: pd.DataFrame, results: pd.DataFrame) -> pd.DataFrame:
     w30 = _window(p, racer_cum, ["racer_id"], 30, cols)
     wl = _window(p, lane_cum, ["racer_id", "boat_no"], 365, ["n", "w1", "w2"])
 
-    def ratio(a, b):
-        a, b = a.to_numpy(), b.to_numpy()
-        return np.where(b > 0, a / np.where(b > 0, b, 1), np.nan)
+    # 出走が少ない選手の率が極端な値にならないよう、平均的な値へ寄せる（10走分。Geminiレビューで追加）
+    PRIOR_N, ST_PRIOR_N, ST_MEAN = 10.0, 5.0, 0.17
 
+    def shrink(num, den, prior, k=PRIOR_N):
+        return (num.to_numpy() + k * np.asarray(prior, dtype=float)) / (den.to_numpy() + k)
+
+    p["cw"] = _course_rate(p, results)
     p["r180_n"] = w180["n"].to_numpy()
-    p["r180_win"] = ratio(w180["w1"], w180["n"])
-    p["r180_top2"] = ratio(w180["w2"], w180["n"])
-    p["r180_top3"] = ratio(w180["w3"], w180["n"])
-    p["r180_st"] = ratio(w180["st_sum"], w180["st_n"])
+    p["r180_win"] = shrink(w180["w1"], w180["n"], 1 / 6)
+    p["r180_top2"] = shrink(w180["w2"], w180["n"], 2 / 6)
+    p["r180_top3"] = shrink(w180["w3"], w180["n"], 3 / 6)
+    p["r180_st"] = shrink(w180["st_sum"], w180["st_n"], ST_MEAN, ST_PRIOR_N)
     p["r180_f"] = w180["f"].to_numpy()
     p["r30_n"] = w30["n"].to_numpy()
-    p["r30_win"] = ratio(w30["w1"], w30["n"])
-    p["r30_top3"] = ratio(w30["w3"], w30["n"])
+    p["r30_win"] = shrink(w30["w1"], w30["n"], p["r180_win"])
+    p["r30_top3"] = shrink(w30["w3"], w30["n"], p["r180_top3"])
     p["lane365_n"] = wl["n"].to_numpy()
-    p["lane365_win"] = ratio(wl["w1"], wl["n"])
-    p["lane365_top2"] = ratio(wl["w2"], wl["n"])
-    p["cw"] = _course_rate(p, results)
+    p["lane365_win"] = shrink(wl["w1"], wl["n"], p["cw"])
+    p["lane365_top2"] = shrink(wl["w2"], wl["n"], p["r180_top2"])
 
     g = p.groupby("race_id", sort=False)
     for c in RELATIVE:
         p[f"{c}_diff"] = p[c] - g[c].transform("mean")
-        p[f"{c}_rank"] = g[c].rank(ascending=False, method="average")
+        # 順位は「良いほうが1位」。平均STだけは小さいほど良い
+        p[f"{c}_rank"] = g[c].rank(ascending=(c == "r180_st"), method="average", na_option="bottom")
+
+    # 1つ内側の艇との差と、1号艇の強さ（展開は内隣と1号艇に左右されるため。Geminiレビューで追加）
+    p["inner_st_diff"] = p["r180_st"] - g["r180_st"].shift(1).fillna(p["r180_st"])
+    p["inner_win_diff"] = p["nat_win_rate"] - g["nat_win_rate"].shift(1).fillna(p["nat_win_rate"])
+    p["boat1_nat_win"] = g["nat_win_rate"].transform("first")
+    p["boat1_r180_st"] = g["r180_st"].transform("first")
 
     p[FEATURES] = p[FEATURES].astype("float32")
     p["venue"] = p["venue"].astype("int32")

@@ -2,7 +2,8 @@
 
 期間の分け方（時系列。未来のデータで過去を予想しない）:
   学習   : 各パターンの開始日 〜 valid開始の前日
-  検証   : valid_start 〜 test開始の前日（学習の止め時と温度Tを決める）
+  検証   : valid_start 〜 cal_start の前日（学習の止め時を決める）
+  補正   : cal_start 〜 test開始の前日（温度Tを決める。止め時と同じデータを使わない。Geminiレビューで分離）
   テスト : test_start 〜 test_end（v0の過去検証と同じ期間で比べる）
 学習期間は 3年・5年・10年・全期間 の4パターンを同じテストで比べる。
 保存先: data/models/v1/{パターン}/ と data/backtest/v1_{パターン}/settled.parquet
@@ -35,6 +36,7 @@ def shift_years(d: str, years: int) -> str:
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--valid-start", default="2025-05-01")
+    p.add_argument("--cal-start", default="2025-09-01")
     p.add_argument("--test-start", default="2025-11-01")
     p.add_argument("--test-end", default="2026-11-10")
     p.add_argument("--windows", default="3y,5y,10y,all")
@@ -56,7 +58,8 @@ def main() -> None:
     del feat, program
     print(f"[V1] dataset rows={len(data):,} races={len(data)//6:,} features={len(features.FEATURES)}", flush=True)
 
-    valid = data[(data["date"] >= a.valid_start) & (data["date"] < a.test_start)]
+    valid = data[(data["date"] >= a.valid_start) & (data["date"] < a.cal_start)]
+    calib = data[(data["date"] >= a.cal_start) & (data["date"] < a.test_start)]
     test = data[(data["date"] >= a.test_start) & (data["date"] <= a.test_end)]
     res_test = results[(results["date"] >= a.test_start) & (results["date"] <= a.test_end)]
 
@@ -67,7 +70,7 @@ def main() -> None:
         tr = data[(data["date"] >= starts[w]) & (data["date"] < a.valid_start)]
         print(f"[V1] --- window={w} train={starts[w]}..{a.valid_start} races={len(tr)//6:,}", flush=True)
         booster = v1.train(tr, valid)
-        T = v1.fit_temperature(v1.raw_scores(booster, valid), valid["y"].to_numpy())
+        T = v1.fit_temperature(v1.raw_scores(booster, calib), calib["y"].to_numpy())
         pred = v1.predict_frame(booster, T, test, w)
         s = settle_predictions(pred, res_test)
         settled_by[w] = s
@@ -83,7 +86,7 @@ def main() -> None:
 
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / w
-            v1.save(booster, T, {"window": w, "train_start": starts[w], "valid_start": a.valid_start,
+            v1.save(booster, T, {"window": w, "train_start": starts[w], "valid_start": a.valid_start, "cal_start": a.cal_start,
                                  "test_start": a.test_start, "test_end": a.test_end,
                                  "trained_on": date.today().isoformat(), **{k: float(row[k]) for k in ("logloss", "brier", "ece")}}, out)
             subprocess.run(["rclone", "copy", str(out), f"{GDRIVE_ROOT}/data/models/v1/{w}"], check=True, capture_output=True)
@@ -93,15 +96,17 @@ def main() -> None:
     print(pd.DataFrame(summary).to_string(index=False))
 
     def paired(name_a, sa, name_b, sb):
-        m = sa[["race_id", "logloss"]].merge(sb[["race_id", "logloss"]], on="race_id", suffixes=("_a", "_b"))
-        d = m["logloss_a"] - m["logloss_b"]
+        """同じレースで比べる。同じ日のレースは似た傾向になるため、1日ごとの平均にまとめてから検定する（Geminiレビューで修正）"""
+        m = sa[["race_id", "date", "logloss"]].merge(sb[["race_id", "logloss"]], on="race_id", suffixes=("_a", "_b"))
+        day = m.groupby("date")[["logloss_a", "logloss_b"]].mean()
+        d = day["logloss_a"] - day["logloss_b"]
         t = d.mean() / (d.std(ddof=1) / np.sqrt(len(d)))
         try:
             pw = stats.wilcoxon(d).pvalue
         except ValueError:
             pw = float("nan")
-        print(f"[V1] {name_a} vs {name_b}: races={len(m):,} LogLoss {m['logloss_a'].mean():.4f} vs {m['logloss_b'].mean():.4f} "
-              f"差={d.mean():+.4f} t={t:+.1f} Wilcoxon p={pw:.2g}")
+        print(f"[V1] {name_a} vs {name_b}: races={len(m):,} days={len(d)} LogLoss {m['logloss_a'].mean():.4f} vs {m['logloss_b'].mean():.4f} "
+              f"差={m['logloss_a'].mean() - m['logloss_b'].mean():+.4f} 日次t={t:+.1f} Wilcoxon p={pw:.2g}")
 
     if not v0s.empty:
         for w in windows:
