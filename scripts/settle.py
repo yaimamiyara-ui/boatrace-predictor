@@ -179,7 +179,7 @@ def main() -> None:
         lines.append("推奨なし")
     if tot["n"]:
         lines.append(f"累計 推奨{tot['n']}点 回収率 {tot['roi']:.0%}")
-    lines.append("※v0は精度確認中のため、推奨は記録のみです")
+    lines.append("※市場との比較がたまるまで、推奨は記録のみです")
     notify_discord("\n".join(lines))
     print("[SETTLE] " + " / ".join(lines[1:]))
 
