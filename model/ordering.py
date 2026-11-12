@@ -54,3 +54,73 @@ def fit(P: np.ndarray, idx: np.ndarray) -> tuple[float, float]:
         if s3 > ll3:
             best3, ll3 = float(l), s3
     return best2, best3
+
+
+# ---- 1着の枠ごとの補正表つき（Geminiの提案をもとにClaude実装） ----
+# P(2着=j | 1着=i) ∝ p_j^l2 × exp(G2[i][j])、P(3着=k | 1着=i, 2着=j) ∝ p_k^l3 × exp(G3[i][k])
+# G2, G3 は6×6の表（1着の枠 i ごとに、各枠が2着・3着に入りやすいかの補正）。過去データから最尤法で決める。
+from scipy.optimize import minimize
+from scipy.special import logsumexp
+
+COMBOS = [(a, b, c) for a, b, c in permutations(range(6), 3)]
+COMBO_NAMES = [f"{a+1}-{b+1}-{c+1}" for a, b, c in COMBOS]
+
+
+def _fit_stage(logP, a, target, exclude, reg=1e-3):
+    n = len(logP)
+    r = np.arange(n)
+    mask = np.zeros((n, 6), dtype=bool)
+    for e in exclude:
+        mask[r, e] = True
+
+    def nll(theta):
+        Z = theta[0] * logP + theta[1:].reshape(6, 6)[a]
+        Z = np.where(mask, -np.inf, Z)
+        return -(Z[r, target] - logsumexp(Z, axis=1)).mean() + reg * np.sum(theta[1:] ** 2)
+
+    x0 = np.concatenate([[1.0], np.zeros(36)])
+    res = minimize(nll, x0, method="L-BFGS-B", options={"maxiter": 300})
+    return float(res.x[0]), res.x[1:].reshape(6, 6)
+
+
+def fit_table(P: np.ndarray, idx: np.ndarray) -> dict:
+    logP = np.log(np.clip(P, 1e-12, None))
+    a, b, c = idx[:, 0], idx[:, 1], idx[:, 2]
+    l2, G2 = _fit_stage(logP, a, b, [a])
+    l3, G3 = _fit_stage(logP, a, c, [a, b])
+    return {"l2": l2, "G2": G2.tolist(), "l3": l3, "G3": G3.tolist()}
+
+
+def all_probs(P: np.ndarray, params: dict) -> np.ndarray:
+    """(レース数, 6) の1着確率から、(レース数, 120) の3連単確率。列の並びは COMBO_NAMES"""
+    P = np.asarray(P, dtype=float).reshape(-1, 6)
+    logP = np.log(np.clip(P, 1e-12, None))
+    G2, G3 = np.asarray(params["G2"]), np.asarray(params["G3"])
+    n = len(P)
+    out = np.zeros((n, 120))
+    col = {cmb: i for i, cmb in enumerate(COMBOS)}
+    dead = P <= 0  # 欠場などで確率0の艇
+    for a in range(6):
+        Z2 = params["l2"] * logP + G2[a]
+        Z2 = np.where(dead, -np.inf, Z2)
+        Z2[:, a] = -np.inf
+        S2 = np.exp(Z2 - logsumexp(Z2, axis=1, keepdims=True))
+        Z3base = params["l3"] * logP + G3[a]
+        Z3base = np.where(dead, -np.inf, Z3base)
+        Z3base[:, a] = -np.inf
+        for b in range(6):
+            if b == a:
+                continue
+            Z3 = Z3base.copy()
+            Z3[:, b] = -np.inf
+            S3 = np.exp(Z3 - logsumexp(Z3, axis=1, keepdims=True))
+            for c in range(6):
+                if c in (a, b):
+                    continue
+                out[:, col[(a, b, c)]] = P[:, a] * S2[:, b] * S3[:, c]
+    return np.nan_to_num(out, nan=0.0)
+
+
+def trifecta_probs_table(p, params: dict) -> dict[str, float]:
+    row = all_probs(np.asarray(p, dtype=float).reshape(1, 6), params)[0]
+    return {name: float(v) for name, v in zip(COMBO_NAMES, row)}

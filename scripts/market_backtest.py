@@ -46,6 +46,11 @@ def main() -> None:
     m["p_harville"] = ordering.winning_combo_prob(P, idx)
     m["p_model"] = ordering.winning_combo_prob(P, idx, l2, l3)
     m["second_half"] = np.arange(len(m)) >= half
+    # 1着の枠ごとの補正表つき（前半で決める）
+    table = ordering.fit_table(P[:half], idx[:half])
+    A = ordering.all_probs(P, table)
+    win_col = np.array([ordering.COMBO_NAMES.index(c) for c in m["trifecta_comb"]])
+    m["p_table"] = A[np.arange(len(m)), win_col]
     m["odds"] = m["trifecta_payout"] / 100.0
     m["p_market"] = np.clip(PAYOUT_RATE / m["odds"], 1e-9, 1)
     m["ll_model"] = -np.log(np.clip(m["p_model"], 1e-9, 1))
@@ -61,10 +66,38 @@ def main() -> None:
     print(f"[MKT] 2着・3着の補正 l2={l2} l3={l3}（前半 {m['date'].iloc[0]}〜{m['date'].iloc[half-1]} で決定）")
     print(f"[MKT] 後半 {h2['date'].iloc[0]}〜{h2['date'].iloc[-1]} {len(h2):,}レースの当たり目LogLoss  "
           f"Harville {h2['ll_harville'].mean():.4f} → 補正後 {h2['ll_model'].mean():.4f}  市場 {h2['ll_market'].mean():.4f}")
+    m["ll_table"] = -np.log(np.clip(m["p_table"], 1e-9, 1))
+    h2 = m[m["second_half"]]
+    print(f"[MKT] 後半の当たり目LogLoss  補正表つき（l2={table['l2']:.2f}, l3={table['l3']:.2f}） {h2['ll_table'].mean():.4f}  "
+          f"（べき乗のみ {h2['ll_model'].mean():.4f}、市場 {h2['ll_market'].mean():.4f}）")
+    print("[MKT] 2着の補正表 G2（行＝1着の枠、列＝2着の枠。大きいほど入りやすい）")
+    print(pd.DataFrame(np.round(table["G2"], 2), index=[f"1着{i}" for i in range(1, 7)], columns=[f"{j}枠" for j in range(1, 7)]).to_string())
+
+    # 過去データだけで測れる回収率：モデル確率の帯ごとに、その帯の目を全部100円ずつ買った場合（後半のみ）
+    # 外れ目のオッズは不要（買う目はモデル確率だけで決まり、払戻は当たり目だけ）
+    sec = m["second_half"].to_numpy()
+    A2, pay2, wc2 = A[sec], m.loc[sec, "trifecta_payout"].to_numpy(), win_col[sec]
+    first = np.array([c[0] for c in ordering.COMBOS])
+    edges = [0, 0.002, 0.005, 0.01, 0.02, 0.04, 0.08, 0.15, 1.01]
+    names = ["〜0.2%", "0.2〜0.5%", "0.5〜1%", "1〜2%", "2〜4%", "4〜8%", "8〜15%", "15%〜"]
+    wp = A2[np.arange(len(A2)), wc2]
+    rows = []
+    for scope, cmask, wmask in (("全部", np.ones(120, bool), np.ones(len(A2), bool)),
+                                ("1号艇が1着の目", first == 0, first[wc2] == 0),
+                                ("1号艇以外が1着の目", first != 0, first[wc2] != 0)):
+        for lo_, hi_, nm in zip(edges[:-1], edges[1:], names):
+            inb = (A2 >= lo_) & (A2 < hi_) & cmask[None, :]
+            bets = int(inb.sum())
+            hit = (wp >= lo_) & (wp < hi_) & wmask
+            ret = float(pay2[hit].sum())
+            rows.append({"対象": scope, "モデル確率": nm, "点数": bets, "的中": int(hit.sum()),
+                         "回収率": ret / (bets * 100) if bets else np.nan})
+    print("[MKT] モデル確率の帯ごとの回収率（後半 %d レース、その帯の目を全部100円ずつ買った場合）" % len(A2))
+    print(pd.DataFrame(rows).to_string(index=False, formatters={"回収率": lambda x: f"{x:.1%}"}))
     import json, subprocess, tempfile
     with tempfile.TemporaryDirectory() as tmp:
         f = Path(tmp) / f"{a.model}.json"
-        f.write_text(json.dumps({"l2": l2, "l3": l3, "fit_races": int(half), "model": a.model}), encoding="utf-8")
+        f.write_text(json.dumps({"l2": l2, "l3": l3, "table": table, "fit_races": int(half), "model": a.model}), encoding="utf-8")
         subprocess.run(["rclone", "copyto", str(f), f"{GDRIVE_ROOT}/data/models/ordering/{a.model}.json"], capture_output=True)
     print(f"[MKT] 3連単の当たり目のLogLoss  モデル {m['ll_model'].mean():.4f}  市場 {m['ll_market'].mean():.4f}  "
           f"差 {m['ll_model'].mean() - m['ll_market'].mean():+.4f}（マイナスならモデルが正確） 日次t={t:+.1f}")
