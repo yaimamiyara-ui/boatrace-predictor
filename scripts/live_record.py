@@ -135,7 +135,8 @@ def record_recommendations(d: date, odds_df: pd.DataFrame) -> int:
     v0の確率の正確さを確かめるまでは記録のみで、Discord通知はしない。"""
     if odds_df.empty:
         return 0
-    from model import v0
+    import numpy as np
+    from model import market, v0
     from storage.gdrive import read_remote_parquet
     pred = read_remote_parquet(f"predictions/{d:%Y}/{d:%Y-%m-%d}.parquet")
     if pred.empty:
@@ -146,14 +147,19 @@ def record_recommendations(d: date, odds_df: pd.DataFrame) -> int:
         if pr.empty:
             continue
         r = pr.iloc[0]
-        p = [float(r[f"p{i}"]) for i in range(1, 7)]
-        import numpy as np
-        probs = v0.harville(np.array(p))
-        odds = dict(zip(g["combo"], g["odds"]))
+        p = np.array([float(r[f"p{i}"]) for i in range(1, 7)])
+        odds = {c: (None if pd.isna(o) else float(o)) for c, o in zip(g["combo"], g["odds"])}
+        # 欠場艇（その艇を含む目がすべて売られていない）がいれば、確率を0にして残りで割り直す
+        out = market.scratched_boats(odds)
+        if len(out) >= 4:   # 3連単が成立しない／オッズ未発売
+            continue
+        if out:
+            p = market.renormalize(p, out)
+        probs = v0.harville(p)
         for pick in v0.select_picks(probs, odds):
             rows.append({
                 "race_id": rid, "model_ver": r["model_ver"], "data_window": r["data_window"],
-                **pick, "stake": STAKE_YEN, "odds_fetched_at": g["fetched_at"].iloc[0],
+                **pick, "stake": STAKE_YEN, "scratched": ",".join(map(str, sorted(out))), "odds_fetched_at": g["fetched_at"].iloc[0],
                 "minutes_to_deadline": g["minutes_to_deadline"].iloc[0],
             })
     return append_day_rel(f"recommendations/{d:%Y}/{d:%Y-%m-%d}.parquet", pd.DataFrame(rows))
