@@ -193,6 +193,8 @@ def record_recommendations(d: date, odds_df: pd.DataFrame, info_df: pd.DataFrame
         pre = pd.DataFrame()
     if not pre.empty:
         append_day_rel(f"predictions_pre/{d:%Y}/{d:%Y-%m-%d}.parquet", pre)
+    n_ex = int(info_df.groupby("race_id")["exhibit_time"].apply(lambda s: s.notna().sum() == 6).sum()) if info_df is not None and not info_df.empty else 0
+    print(f"[PRERACE] 直前情報で更新したレース={len(pre)}（展示タイムがそろっていたレース={n_ex}、対象={odds_df['race_id'].nunique()}）", flush=True)
     # 3連単確率の補正表（無ければHarville）
     def load_table(key):
         params = _load_json(f"models/ordering/{active[key]}.json") if active.get(key) else None
