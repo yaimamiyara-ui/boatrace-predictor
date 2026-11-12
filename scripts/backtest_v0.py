@@ -38,8 +38,9 @@ def main() -> None:
     results_all = read_category("results", f"{start.year - v0.COURSE_YEARS - 1}-01-01", a.end)
     program_all = read_category("program", (start - timedelta(days=92)).isoformat(), a.end)
 
-    rates0 = v0.course_win_rates(results_all, a.start)
     fit_start = (start - timedelta(days=92)).isoformat()
+    # alphaを決める期間（開始前92日）の結果を含めないよう、その期間の初日時点で計算（Geminiレビューで修正）
+    rates0 = v0.course_win_rates(results_all, fit_start)
     fit_prog = program_all[(program_all["date"] >= fit_start) & (program_all["date"] < a.start)]
     fit_res = results_all[(results_all["date"] >= fit_start) & (results_all["date"] < a.start)]
     alpha = v0.fit_alpha(fit_prog, fit_res, rates0)

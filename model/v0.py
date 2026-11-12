@@ -114,8 +114,6 @@ def select_picks(combo_probs: dict[str, float], odds: dict[str, float]) -> list[
         if ev >= EV_MIN:
             cands.append({"combo": combo, "prob": float(pr), "odds": float(o), "ev": float(ev)})
     cands.sort(key=lambda x: x["ev"], reverse=True)
-    picks = cands[:MAX_PICKS]
-    # 合成オッズ（=1/Σ(1/オッズ)）が1倍未満なら、期待値の低い目から外す
-    while picks and 1 / sum(1 / x["odds"] for x in picks) < 1.0:
-        picks.pop()
-    return picks
+    # 1点ずつ均等買い（100円）なので、各目が期待値1.15以上であれば採用する。
+    # 合成オッズ（資金を傾斜配分する場合の指標）による絞り込みは、均等買いには当てはまらないため使わない（Geminiレビューで修正）。
+    return cands[:MAX_PICKS]

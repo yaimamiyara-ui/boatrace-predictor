@@ -42,7 +42,8 @@ def main() -> None:
 
     fit_start = (d - timedelta(days=92)).isoformat()
     fit_end = (d - timedelta(days=1)).isoformat()
-    alpha = v0.fit_alpha(read_category("program", fit_start, fit_end), read_category("results", fit_start, fit_end), rates)
+    rates_fit = v0.course_win_rates(results, fit_start)  # alphaを決める期間の結果を含めない
+    alpha = v0.fit_alpha(read_category("program", fit_start, fit_end), read_category("results", fit_start, fit_end), rates_fit)
 
     pred = v0.predict_program(prog, rates, alpha)
     write_remote_parquet(pred, f"predictions/{d:%Y}/{ds}.parquet")
