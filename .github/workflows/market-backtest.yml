@@ -1,0 +1,26 @@
+name: Market Backtest
+
+# 過去データで、モデルと市場（当たり目のオッズ）のどちらが正確かを比べる（手動実行）
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "v0 / v1_3y / v1_5y / v1_10y / v1_all"
+        required: true
+        default: "v0"
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          rclone_config: ${{ secrets.RCLONE_CONFIG }}
+      - env:
+          MODEL: ${{ inputs.model }}
+        run: python scripts/market_backtest.py --model "$MODEL"
