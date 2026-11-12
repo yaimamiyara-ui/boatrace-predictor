@@ -40,6 +40,7 @@ def main() -> None:
     p.add_argument("--test-start", default="2025-11-01")
     p.add_argument("--test-end", default="2026-11-10")
     p.add_argument("--windows", default="3y,5y,10y,all")
+    p.add_argument("--pre", action="store_true", help="直前情報ありモデル（v1p）を学習する")
     a = p.parse_args()
 
     starts = {"3y": shift_years(a.valid_start, 3), "5y": shift_years(a.valid_start, 5),
@@ -49,14 +50,20 @@ def main() -> None:
 
     sync_category("results")
     sync_category("program")
-    results = read_category("results", FIRST_DATA, a.test_end, columns=features.RESULT_COLS)
+    ver = "v1p" if a.pre else "v1"
+    rcols = features.RESULT_COLS + (["exhibit_time", "wind_speed", "wave_height"] if a.pre else [])
+    results = read_category("results", FIRST_DATA, a.test_end, columns=rcols)
     program = read_category("program", earliest, a.test_end, columns=features.PROGRAM_COLS)
     print(f"[V1] loaded results={len(results):,} program={len(program):,}", flush=True)
 
     feat = features.build(program, results)
+    feats = list(features.FEATURES)
+    if a.pre:
+        feat = features.add_pre(feat, results, results)
+        feats += features.PRE_FEATURES
     data = features.labels(feat, results)
     del feat, program
-    print(f"[V1] dataset rows={len(data):,} races={len(data)//6:,} features={len(features.FEATURES)}", flush=True)
+    print(f"[V1] dataset rows={len(data):,} races={len(data)//6:,} features={len(feats)} model={ver}", flush=True)
 
     valid = data[(data["date"] >= a.valid_start) & (data["date"] < a.cal_start)]
     calib = data[(data["date"] >= a.cal_start) & (data["date"] < a.test_start)]
@@ -69,9 +76,9 @@ def main() -> None:
     for w in windows:
         tr = data[(data["date"] >= starts[w]) & (data["date"] < a.valid_start)]
         print(f"[V1] --- window={w} train={starts[w]}..{a.valid_start} races={len(tr)//6:,}", flush=True)
-        booster = v1.train(tr, valid)
+        booster = v1.train(tr, valid, feats=feats)
         T = v1.fit_temperature(v1.raw_scores(booster, calib), calib["y"].to_numpy())
-        pred = v1.predict_frame(booster, T, test, w)
+        pred = v1.predict_frame(booster, T, test, w, model_ver=ver, has_beforeinfo=a.pre)
         s = settle_predictions(pred, res_test)
         settled_by[w] = s
         cal = calibration_table(s)
@@ -81,7 +88,7 @@ def main() -> None:
         print(f"[V1] {row}", flush=True)
         print(cal.to_string(index=False), flush=True)
 
-        imp = pd.Series(booster.feature_importance("gain"), index=features.FEATURES).sort_values(ascending=False)
+        imp = pd.Series(booster.feature_importance("gain"), index=booster.feature_name()).sort_values(ascending=False)
         print("[V1] 重要な特徴量 上位12:", ", ".join(f"{k}({v/imp.sum():.0%})" for k, v in imp.head(12).items()), flush=True)
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -89,8 +96,8 @@ def main() -> None:
             v1.save(booster, T, {"window": w, "train_start": starts[w], "valid_start": a.valid_start, "cal_start": a.cal_start,
                                  "test_start": a.test_start, "test_end": a.test_end,
                                  "trained_on": date.today().isoformat(), **{k: float(row[k]) for k in ("logloss", "brier", "ece")}}, out)
-            subprocess.run(["rclone", "copy", str(out), f"{GDRIVE_ROOT}/data/models/v1/{w}"], check=True, capture_output=True)
-        write_remote_parquet(s, f"backtest/v1_{w}/settled.parquet")
+            subprocess.run(["rclone", "copy", str(out), f"{GDRIVE_ROOT}/data/models/{ver}/{w}"], check=True, capture_output=True)
+        write_remote_parquet(s, f"backtest/{ver}_{w}/settled.parquet")
 
     print("\n[V1] ===== まとめ（テスト期間 %s〜%s）=====" % (a.test_start, a.test_end))
     print(pd.DataFrame(summary).to_string(index=False))
@@ -110,11 +117,16 @@ def main() -> None:
 
     if not v0s.empty:
         for w in windows:
-            paired(f"v1_{w}", settled_by[w], "v0", v0s)
+            paired(f"{ver}_{w}", settled_by[w], "v0", v0s)
     base = "5y" if "5y" in settled_by else windows[0]
     for w in windows:
         if w != base:
-            paired(f"v1_{w}", settled_by[w], f"v1_{base}", settled_by[base])
+            paired(f"{ver}_{w}", settled_by[w], f"{ver}_{base}", settled_by[base])
+    if a.pre:  # 直前情報なしのv1と比べる
+        for w in windows:
+            v1s = read_remote_parquet(f"backtest/v1_{w}/settled.parquet")
+            if not v1s.empty:
+                paired(f"v1p_{w}", settled_by[w], f"v1_{w}", v1s)
 
 
 if __name__ == "__main__":

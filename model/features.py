@@ -68,15 +68,16 @@ def _window(left: pd.DataFrame, cum: pd.DataFrame, by: list[str], days: int, col
     return (hi - lo).reindex(left["_row"])
 
 
-def _course_rate(prog: pd.DataFrame, results: pd.DataFrame) -> np.ndarray:
-    """場×枠の1着率（その月の初日より前の直近3年）"""
+def _course_rate(prog: pd.DataFrame, results: pd.DataFrame, col: str = "boat_no") -> np.ndarray:
+    """場×枠（col="course" なら場×進入コース）の1着率（その月の初日より前の直近3年）"""
     out = np.full(len(prog), np.nan)
     months = prog["date"].str[:7]
     for ym in sorted(months.unique()):
         rates = v0.course_win_rates(results, f"{ym}-01")
         idx = np.where(months.to_numpy() == ym)[0]
         sub = prog.iloc[idx]
-        out[idx] = [rates.get(v, rates["_all"])[b - 1] for v, b in zip(sub["venue_code"], sub["boat_no"].astype(int))]
+        out[idx] = [rates.get(v, rates["_all"])[int(b) - 1] if b == b and 1 <= b <= 6 else np.nan
+                    for v, b in zip(sub["venue_code"], sub[col])]
     return out
 
 
@@ -133,6 +134,27 @@ def build(program: pd.DataFrame, results: pd.DataFrame) -> pd.DataFrame:
     p[FEATURES] = p[FEATURES].astype("float32")
     p["venue"] = p["venue"].astype("int32")
     return p.drop(columns=["_row", "d"])
+
+
+# ---- 直前情報ありモデル（v1p）用の追加特徴量 ----
+PRE_COLS = ["race_id", "boat_no", "exhibit_time", "course", "wind_speed", "wave_height"]
+PRE_FEATURES = ["exhibit_time", "exhibit_diff", "exhibit_rank", "course", "course_shift", "cw_course",
+                "wind_speed", "wave_height"]
+
+
+def add_pre(feat: pd.DataFrame, pre: pd.DataFrame, results: pd.DataFrame) -> pd.DataFrame:
+    """直前情報（展示タイム・進入コース・風速・波高）の特徴量を足す。
+    pre は PRE_COLS を持つ表。学習時は成績ファイルの値（展示タイム・本番の進入・レース時の風と波）を使い、
+    本番では締切前の直前情報（展示タイム・スタート展示の進入・その時点の風と波）を渡す。"""
+    out = feat.merge(pre[PRE_COLS].drop_duplicates(["race_id", "boat_no"]), on=["race_id", "boat_no"], how="left")
+    out = out.sort_values(["race_id", "boat_no"]).reset_index(drop=True)
+    g = out.groupby("race_id", sort=False)
+    out["exhibit_diff"] = out["exhibit_time"] - g["exhibit_time"].transform("mean")
+    out["exhibit_rank"] = g["exhibit_time"].rank(ascending=True, method="average", na_option="bottom")
+    out["course_shift"] = out["course"] - out["boat_no"]
+    out["cw_course"] = _course_rate(out, results, col="course")
+    out[PRE_FEATURES] = out[PRE_FEATURES].astype("float32")
+    return out
 
 
 def labels(feat: pd.DataFrame, results: pd.DataFrame) -> pd.DataFrame:

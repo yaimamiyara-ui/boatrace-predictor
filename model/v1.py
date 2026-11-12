@@ -41,7 +41,8 @@ def _metric(preds, dvalid):
     return "race_logloss", race_logloss(softmax6(preds), dvalid.get_label()), False
 
 
-def train(train_df: pd.DataFrame, valid_df: pd.DataFrame, rounds: int = 3000):
+def train(train_df: pd.DataFrame, valid_df: pd.DataFrame, rounds: int = 3000, feats: list[str] | None = None):
+    feats = feats or FEATURES
     params = {
         "objective": _objective,
         "metric": "None",
@@ -54,8 +55,8 @@ def train(train_df: pd.DataFrame, valid_df: pd.DataFrame, rounds: int = 3000):
         "verbose": -1,
         "seed": 42,
     }
-    dtr = lgb.Dataset(train_df[FEATURES], label=train_df["y"], categorical_feature=CATEGORICAL, free_raw_data=False)
-    dva = lgb.Dataset(valid_df[FEATURES], label=valid_df["y"], categorical_feature=CATEGORICAL, reference=dtr)
+    dtr = lgb.Dataset(train_df[feats], label=train_df["y"], categorical_feature=CATEGORICAL, free_raw_data=False)
+    dva = lgb.Dataset(valid_df[feats], label=valid_df["y"], categorical_feature=CATEGORICAL, reference=dtr)
     booster = lgb.train(
         params, dtr, num_boost_round=rounds, valid_sets=[dva], valid_names=["valid"], feval=_metric,
         callbacks=[lgb.early_stopping(100), lgb.log_evaluation(100)],
@@ -64,7 +65,8 @@ def train(train_df: pd.DataFrame, valid_df: pd.DataFrame, rounds: int = 3000):
 
 
 def raw_scores(booster, df: pd.DataFrame) -> np.ndarray:
-    return booster.predict(df[FEATURES], num_iteration=booster.best_iteration or None, raw_score=True)
+    # 学習時の特徴量の並びをモデルから取り出して使う（v1とv1pで特徴量が違うため）
+    return booster.predict(df[booster.feature_name()], num_iteration=booster.best_iteration or None, raw_score=True)
 
 
 def fit_temperature(scores: np.ndarray, y: np.ndarray) -> float:
@@ -73,11 +75,12 @@ def fit_temperature(scores: np.ndarray, y: np.ndarray) -> float:
     return float(grid[int(np.argmin(losses))])
 
 
-def predict_frame(booster, temperature: float, feat: pd.DataFrame, data_window: str) -> pd.DataFrame:
+def predict_frame(booster, temperature: float, feat: pd.DataFrame, data_window: str,
+                  model_ver: str = MODEL_VER, has_beforeinfo: bool = False) -> pd.DataFrame:
     """特徴量（race_id・艇番順、6行ずつ）から、1レース1行の予想（p1〜p6）を作る"""
     p = softmax6(raw_scores(booster, feat), temperature)
     head = feat.iloc[::6][["race_id", "date", "venue_code", "race_no"]].reset_index(drop=True)
-    out = head.assign(model_ver=MODEL_VER, data_window=data_window, has_beforeinfo=False, n_boats=6)
+    out = head.assign(model_ver=model_ver, data_window=data_window, has_beforeinfo=has_beforeinfo, n_boats=6)
     out["race_no"] = out["race_no"].astype(int)
     for i in range(6):
         out[f"p{i+1}"] = p[:, i]
@@ -88,7 +91,7 @@ def save(booster, temperature: float, meta: dict, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     booster.save_model(str(out_dir / "model.txt"), num_iteration=booster.best_iteration or None)
     (out_dir / "meta.json").write_text(
-        json.dumps({"temperature": temperature, "features": FEATURES, **meta}, ensure_ascii=False, indent=2),
+        json.dumps({"temperature": temperature, "features": booster.feature_name(), **meta}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 

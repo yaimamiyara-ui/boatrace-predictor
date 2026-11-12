@@ -8,6 +8,10 @@ on:
         description: "学習期間のパターン（カンマ区切り）"
         required: true
         default: "3y,5y,10y,all"
+      pre:
+        description: "直前情報ありモデル（v1p）なら true"
+        required: true
+        default: "false"
       valid_start:
         description: "検証の開始日"
         required: true
@@ -36,7 +40,10 @@ jobs:
       - name: Train and evaluate
         env:
           WINDOWS: ${{ inputs.windows }}
+          PRE: ${{ inputs.pre }}
           VALID_START: ${{ inputs.valid_start }}
           TEST_START: ${{ inputs.test_start }}
           TEST_END: ${{ inputs.test_end }}
-        run: python scripts/train_v1.py --windows "$WINDOWS" --valid-start "$VALID_START" --test-start "$TEST_START" --test-end "$TEST_END"
+        run: |
+          if [ "$PRE" = "true" ]; then EXTRA="--pre"; else EXTRA=""; fi
+          python scripts/train_v1.py $EXTRA --windows "$WINDOWS" --valid-start "$VALID_START" --test-start "$TEST_START" --test-end "$TEST_END"
