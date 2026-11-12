@@ -1,0 +1,48 @@
+name: Daily Model
+
+# 07:21 JST : 前日分の答え合わせ → ダッシュボード更新 → Discordに要約
+# 07:51 JST : 当日の番組表を取得し、v0で予想（各レースの1着確率）
+on:
+  schedule:
+    - cron: "21 22 * * *"
+    - cron: "51 22 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "settle / predict"
+        required: true
+        default: "predict"
+      date:
+        description: "対象日 YYYY-MM-DD（空欄で自動）"
+        required: false
+        default: ""
+
+concurrency:
+  group: gdrive-parquet-write
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          rclone_config: ${{ secrets.RCLONE_CONFIG }}
+      - name: Run
+        env:
+          EVENT: ${{ github.event_name }}
+          SCHED: ${{ github.event.schedule }}
+          IN_MODE: ${{ inputs.mode }}
+          IN_DATE: ${{ inputs.date }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then MODE="$IN_MODE"; DAY="$IN_DATE";
+          elif [ "$SCHED" = "21 22 * * *" ]; then MODE=settle; DAY="";
+          else MODE=predict; DAY=""; fi
+          if [ "$MODE" = "settle" ]; then S=scripts/settle.py; else S=scripts/predict_today.py; fi
+          if [ -n "$DAY" ]; then python "$S" --date "$DAY"; else python "$S"; fi

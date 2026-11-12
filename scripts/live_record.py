@@ -123,7 +123,49 @@ def mode_prerace(d: date, now: datetime) -> None:
 
     n1 = append_day("odds_pre", d, pd.DataFrame(odds_rows))
     n2 = append_day("beforeinfo", d, pd.DataFrame(info_rows))
-    print(f"[PRERACE] races={len(targets)} odds_rows={n1} beforeinfo_rows={n2}", flush=True)
+    n3 = record_recommendations(d, pd.DataFrame(odds_rows))
+    print(f"[PRERACE] races={len(targets)} odds_rows={n1} beforeinfo_rows={n2} recommendations={n3}", flush=True)
+
+
+STAKE_YEN = 100
+
+
+def record_recommendations(d: date, odds_df: pd.DataFrame) -> int:
+    """朝の予想（1着確率）と締切前オッズから期待値を計算し、推奨買い目を保存する。
+    v0の確率の正確さを確かめるまでは記録のみで、Discord通知はしない。"""
+    if odds_df.empty:
+        return 0
+    from model import v0
+    from storage.gdrive import read_remote_parquet
+    pred = read_remote_parquet(f"predictions/{d:%Y}/{d:%Y-%m-%d}.parquet")
+    if pred.empty:
+        return 0
+    rows = []
+    for rid, g in odds_df.groupby("race_id"):
+        pr = pred[pred["race_id"] == rid]
+        if pr.empty:
+            continue
+        r = pr.iloc[0]
+        p = [float(r[f"p{i}"]) for i in range(1, 7)]
+        import numpy as np
+        probs = v0.harville(np.array(p))
+        odds = dict(zip(g["combo"], g["odds"]))
+        for pick in v0.select_picks(probs, odds):
+            rows.append({
+                "race_id": rid, "model_ver": r["model_ver"], "data_window": r["data_window"],
+                **pick, "stake": STAKE_YEN, "odds_fetched_at": g["fetched_at"].iloc[0],
+                "minutes_to_deadline": g["minutes_to_deadline"].iloc[0],
+            })
+    return append_day_rel(f"recommendations/{d:%Y}/{d:%Y-%m-%d}.parquet", pd.DataFrame(rows))
+
+
+def append_day_rel(rel: str, new: pd.DataFrame) -> int:
+    from storage.gdrive import read_remote_parquet, write_remote_parquet
+    if new.empty:
+        return 0
+    old = read_remote_parquet(rel)
+    write_remote_parquet(pd.concat([old, new], ignore_index=True) if not old.empty else new, rel)
+    return len(new)
 
 
 def mode_final(d: date) -> None:

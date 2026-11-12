@@ -1,0 +1,32 @@
+name: Backtest v0
+
+# v0の過去検証（手動実行）。その時点までのデータだけで予想し、確率の当たり具合を集計する。
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "開始日 YYYY-MM-DD"
+        required: true
+        default: "2025-11-01"
+      end:
+        description: "終了日 YYYY-MM-DD"
+        required: true
+        default: "2026-11-10"
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          rclone_config: ${{ secrets.RCLONE_CONFIG }}
+      - name: Run backtest
+        env:
+          START: ${{ inputs.start }}
+          END: ${{ inputs.end }}
+        run: python scripts/backtest_v0.py --start "$START" --end "$END"

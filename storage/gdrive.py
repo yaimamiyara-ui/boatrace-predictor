@@ -48,6 +48,55 @@ def save_monthly_parquet(df: pd.DataFrame, category: str, year_month: str) -> No
         )
 
 
+CACHE_DIR = Path("cache")
+
+
+def sync_category(category: str, years: list[int] | None = None) -> Path:
+    """Googleドライブの data/{category} を手元の cache/{category} にまとめて取得し、そのパスを返す（Claude追加）"""
+    local = CACHE_DIR / category
+    local.mkdir(parents=True, exist_ok=True)
+    cmd = ["rclone", "copy", f"{GDRIVE_ROOT}/data/{category}", str(local), "--transfers", "8"]
+    if years:
+        for y in years:
+            cmd += ["--include", f"{y}/**"]
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    return local
+
+
+def read_category(category: str, start: str, end: str) -> pd.DataFrame:
+    """cache/{category} から date が start〜end（YYYY-MM-DD、両端含む）の行を読む。先に sync_category を呼ぶこと"""
+    local = CACHE_DIR / category
+    files = sorted(local.glob("*/*.parquet"))
+    keep = [f for f in files if start[:7] <= f.stem <= end[:7]]
+    if not keep:
+        return pd.DataFrame()
+    df = pd.concat([pd.read_parquet(f) for f in keep], ignore_index=True)
+    return df[(df["date"] >= start) & (df["date"] <= end)].reset_index(drop=True)
+
+
+def write_remote_parquet(df: pd.DataFrame, remote_rel: str) -> None:
+    """data/ 以下の任意のパスへParquetを書き込む（例: 'predictions/2026/2026-11-12.parquet'）"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        local_file = Path(tmpdir) / "x.parquet"
+        df.to_parquet(local_file, index=False)
+        subprocess.run(
+            ["rclone", "copyto", str(local_file), f"{GDRIVE_ROOT}/data/{remote_rel}"],
+            check=True, capture_output=True, text=True,
+        )
+
+
+def read_remote_parquet(remote_rel: str) -> pd.DataFrame:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        local_file = Path(tmpdir) / "x.parquet"
+        r = subprocess.run(
+            ["rclone", "copyto", f"{GDRIVE_ROOT}/data/{remote_rel}", str(local_file)],
+            capture_output=True, text=True,
+        )
+        if r.returncode == 0 and local_file.exists():
+            return pd.read_parquet(local_file)
+    return pd.DataFrame()
+
+
 def get_existing_dates(category: str, year_month: str) -> Set[str]:
     """指定年月のParquetに既に含まれている日付 ('YYYY-MM-DD') の集合を返す"""
     df = load_monthly_parquet(category, year_month)
