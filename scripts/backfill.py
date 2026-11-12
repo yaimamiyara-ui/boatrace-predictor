@@ -91,6 +91,12 @@ def run_backfill(start_str: str, end_str: str) -> None:
             upsert_monthly_parquet(df_pay, "payouts", ym, ["race_id"])
             total_pay_rows += len(df_pay)
 
+        # 月ごとの進捗（途中で止まっても、どこまで保存できたか分かるように）
+        print(
+            f"[MONTH DONE] {ym} program={len(prog_list)} results={len(res_list)} payouts={len(pay_list)}",
+            flush=True,
+        )
+
     print(
         f"[BACKFILL SUMMARY] range={start_str}..{end_str} "
         f"fetched_days={fetched_days} skipped_days={skipped_days} "
