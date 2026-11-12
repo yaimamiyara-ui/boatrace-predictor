@@ -1,4 +1,5 @@
 import io
+import os
 import time
 from datetime import date
 from typing import Optional
@@ -12,7 +13,7 @@ BASE_URL_K = "https://www1.mbrace.or.jp/od2/K/{yyyy}{mm}/k{yy}{mm}{dd}.lzh"
 def download_and_extract_lzh(
     target_date: date,
     file_type: str,
-    sleep_sec: float = 3.2,
+    sleep_sec: float = float(os.environ.get("FETCH_SLEEP_SEC", "3.2")),
     max_retries: int = 3,
 ) -> Optional[str]:
     """

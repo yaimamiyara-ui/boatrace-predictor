@@ -48,6 +48,7 @@ def all_months(last_day: date) -> list[str]:
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--budget-min", type=float, default=45)
+    p.add_argument("--year", type=int, default=None, help="指定すると、その年の月だけを処理（並列実行用）")
     a = p.parse_args()
 
     started = time.monotonic()
@@ -55,6 +56,8 @@ def main() -> None:
     current_month = f"{yesterday.year:04d}-{yesterday.month:02d}"
     done = done_months()
     todo = [ym for ym in all_months(yesterday) if ym not in done]
+    if a.year:
+        todo = [ym for ym in todo if ym.startswith(f"{a.year:04d}-")]
     print(f"[AUTO] done_months={len(done)} remaining_months={len(todo)}", flush=True)
 
     for ym in todo:

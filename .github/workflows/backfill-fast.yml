@@ -1,0 +1,50 @@
+name: Backfill Fast
+
+# 過去データを年ごとに並列で取得する（手動実行）。
+# 公式サイトへの負荷を抑えるため、同時実行は5年分まで、1ファイルごとに1.5秒あける。
+# 取り終えた月は _done の印が付くので、再実行すると残りだけを取る。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  year:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        year: [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012]
+    concurrency:
+      group: gdrive-year-${{ matrix.year }}
+      cancel-in-progress: false
+    env:
+      FETCH_SLEEP_SEC: "1.5"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+          pip install -r requirements.txt
+
+      - name: Install and configure rclone
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          curl -fsSL https://rclone.org/install.sh | sudo bash
+          mkdir -p ~/.config/rclone
+          printf "%s\n" "$RCLONE_CONFIG_CONTENT" > ~/.config/rclone/rclone.conf
+          chmod 600 ~/.config/rclone/rclone.conf
+
+      - name: Fetch one year
+        run: python scripts/backfill_auto.py --year ${{ matrix.year }} --budget-min 110
