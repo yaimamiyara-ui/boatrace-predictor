@@ -2,7 +2,8 @@
   "model": "v1",
   "window": "10y",
   "ordering": "v1_10y",
-  "use_pre": false,
+  "use_pre": true,
   "pre_window": "10y",
-  "note": "model: 朝の予想に使うモデル（v0/v1）。ordering: 3連単確率の補正表。use_pre: 締切前に直前情報ありモデル（v1p）で確率を更新するか"
+  "note": "model: 朝の予想に使うモデル（v0/v1）。ordering: 3連単確率の補正表。use_pre: 締切前に直前情報ありモデル（v1p）で確率を更新するか",
+  "pre_ordering": "v1p_10y"
 }

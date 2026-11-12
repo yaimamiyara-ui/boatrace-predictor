@@ -194,8 +194,12 @@ def record_recommendations(d: date, odds_df: pd.DataFrame, info_df: pd.DataFrame
     if not pre.empty:
         append_day_rel(f"predictions_pre/{d:%Y}/{d:%Y-%m-%d}.parquet", pre)
     # 3連単確率の補正表（無ければHarville）
-    params = _load_json(f"models/ordering/{active.get('ordering', '')}.json") if active.get("ordering") else None
-    table = params.get("table") if params else None
+    def load_table(key):
+        params = _load_json(f"models/ordering/{active[key]}.json") if active.get(key) else None
+        return params.get("table") if params else None
+
+    table_base = load_table("ordering")
+    table_pre = load_table("pre_ordering") if not pre.empty else None
 
     rows = []
     for rid, g in odds_df.groupby("race_id"):
@@ -204,6 +208,9 @@ def record_recommendations(d: date, odds_df: pd.DataFrame, info_df: pd.DataFrame
         if pr.empty:
             continue
         r = pr.iloc[0]
+        used_pre = not src.empty
+        table = (table_pre or table_base) if used_pre else table_base
+        okey = ("pre_ordering" if (used_pre and table_pre) else "ordering")
         p = np.array([float(r[f"p{i}"]) for i in range(1, 7)])
         odds = {c: (None if pd.isna(o) else float(o)) for c, o in zip(g["combo"], g["odds"])}
         # 欠場艇（その艇を含む目がすべて売られていない）がいれば、確率を0にして残りで割り直す
@@ -216,7 +223,7 @@ def record_recommendations(d: date, odds_df: pd.DataFrame, info_df: pd.DataFrame
         for pick in v0.select_picks(probs, odds):
             rows.append({
                 "race_id": rid, "model_ver": r["model_ver"], "data_window": r["data_window"],
-                "ordering": active.get("ordering", "") if table else "harville",
+                "ordering": active.get(okey, "") if table else "harville",
                 **pick, "stake": STAKE_YEN, "scratched": ",".join(map(str, sorted(out))), "odds_fetched_at": g["fetched_at"].iloc[0],
                 "minutes_to_deadline": g["minutes_to_deadline"].iloc[0],
             })
