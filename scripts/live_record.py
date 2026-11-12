@@ -123,27 +123,84 @@ def mode_prerace(d: date, now: datetime) -> None:
 
     n1 = append_day("odds_pre", d, pd.DataFrame(odds_rows))
     n2 = append_day("beforeinfo", d, pd.DataFrame(info_rows))
-    n3 = record_recommendations(d, pd.DataFrame(odds_rows))
+    n3 = record_recommendations(d, pd.DataFrame(odds_rows), pd.DataFrame(info_rows))
     print(f"[PRERACE] races={len(targets)} odds_rows={n1} beforeinfo_rows={n2} recommendations={n3}", flush=True)
 
 
 STAKE_YEN = 100
 
 
-def record_recommendations(d: date, odds_df: pd.DataFrame) -> int:
-    """朝の予想（1着確率）と締切前オッズから期待値を計算し、推奨買い目を保存する。
-    v0の確率の正確さを確かめるまでは記録のみで、Discord通知はしない。"""
+def _load_json(remote_rel: str):
+    """Googleドライブの data/ 以下のJSONを読む。無ければ None"""
+    import json
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / "x.json"
+        r = subprocess.run(["rclone", "copyto", f"{GDRIVE_ROOT}/data/{remote_rel}", str(f)], capture_output=True, text=True)
+        if r.returncode == 0 and f.exists():
+            return json.loads(f.read_text(encoding="utf-8"))
+    return None
+
+
+def _active() -> dict:
+    import json
+    return json.loads((Path(__file__).resolve().parent.parent / "model" / "active.json").read_text(encoding="utf-8"))
+
+
+def pre_predictions(d: date, info_df: pd.DataFrame, active: dict) -> pd.DataFrame:
+    """直前情報ありモデル（v1p）で、対象レースの1着確率を出し直す。使えないときは空の表を返す"""
+    from model import features, v1
+    from storage.gdrive import read_remote_parquet
+    if info_df.empty or not active.get("use_pre"):
+        return pd.DataFrame()
+    ds = d.isoformat()
+    feat = read_remote_parquet(f"live/features/{d:%Y}/{ds}.parquet")
+    rates = _load_json(f"live/features/{d:%Y}/{ds}_rates.json")
+    if feat.empty or rates is None:
+        return pd.DataFrame()
+    feat = feat[feat["race_id"].isin(set(info_df["race_id"]))]
+    # 展示タイムが6艇そろったレースだけ更新する
+    ok = info_df.groupby("race_id")["exhibit_time"].apply(lambda s: s.notna().sum() == 6)
+    feat = feat[feat["race_id"].isin(set(ok[ok].index))]
+    if feat.empty:
+        return pd.DataFrame()
+    pre = info_df.rename(columns={"exhibit_course": "course"})[["race_id", "boat_no", "exhibit_time", "course", "wind_speed", "wave_height"]]
+    pre = pre.assign(course=pre["course"].fillna(pre["boat_no"]))
+    feat = features.add_pre(feat, pre, rates=rates)
+    window = active.get("pre_window", "10y")
+    model_dir = Path("cache") / "models" / "v1p" / window
+    model_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["rclone", "copy", f"{GDRIVE_ROOT}/data/models/v1p/{window}", str(model_dir)], check=True, capture_output=True)
+    booster, T, _ = v1.load(model_dir)
+    return v1.predict_frame(booster, T, feat, window, model_ver="v1p", has_beforeinfo=True)
+
+
+def record_recommendations(d: date, odds_df: pd.DataFrame, info_df: pd.DataFrame | None = None) -> int:
+    """予想（1着確率）と締切前オッズから期待値を計算し、推奨買い目を保存する。
+    直前情報ありモデルが有効なら、その確率を優先する。市場に勝てることを確かめるまでは記録のみで、通知はしない。"""
     if odds_df.empty:
         return 0
     import numpy as np
-    from model import market, v0
+    from model import market, ordering, v0
     from storage.gdrive import read_remote_parquet
     pred = read_remote_parquet(f"predictions/{d:%Y}/{d:%Y-%m-%d}.parquet")
     if pred.empty:
         return 0
+    active = _active()
+    try:
+        pre = pre_predictions(d, info_df if info_df is not None else pd.DataFrame(), active)
+    except Exception as e:  # 直前情報での更新に失敗しても、朝の予想で続ける
+        print(f"[PRERACE] 直前情報での更新をスキップ: {type(e).__name__}: {e}", flush=True)
+        pre = pd.DataFrame()
+    if not pre.empty:
+        append_day_rel(f"predictions_pre/{d:%Y}/{d:%Y-%m-%d}.parquet", pre)
+    # 3連単確率の補正表（無ければHarville）
+    params = _load_json(f"models/ordering/{active.get('ordering', '')}.json") if active.get("ordering") else None
+    table = params.get("table") if params else None
+
     rows = []
     for rid, g in odds_df.groupby("race_id"):
-        pr = pred[pred["race_id"] == rid]
+        src = pre[pre["race_id"] == rid] if not pre.empty else pd.DataFrame()
+        pr = src if not src.empty else pred[pred["race_id"] == rid]
         if pr.empty:
             continue
         r = pr.iloc[0]
@@ -155,10 +212,11 @@ def record_recommendations(d: date, odds_df: pd.DataFrame) -> int:
             continue
         if out:
             p = market.renormalize(p, out)
-        probs = v0.harville(p)
+        probs = ordering.trifecta_probs_table(p, table) if table else v0.harville(p)
         for pick in v0.select_picks(probs, odds):
             rows.append({
                 "race_id": rid, "model_ver": r["model_ver"], "data_window": r["data_window"],
+                "ordering": active.get("ordering", "") if table else "harville",
                 **pick, "stake": STAKE_YEN, "scratched": ",".join(map(str, sorted(out))), "odds_fetched_at": g["fetched_at"].iloc[0],
                 "minutes_to_deadline": g["minutes_to_deadline"].iloc[0],
             })

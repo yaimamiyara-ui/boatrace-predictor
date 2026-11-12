@@ -142,7 +142,7 @@ PRE_FEATURES = ["exhibit_time", "exhibit_diff", "exhibit_rank", "course", "cours
                 "wind_speed", "wave_height"]
 
 
-def add_pre(feat: pd.DataFrame, pre: pd.DataFrame, results: pd.DataFrame) -> pd.DataFrame:
+def add_pre(feat: pd.DataFrame, pre: pd.DataFrame, results: pd.DataFrame | None = None, rates: dict | None = None) -> pd.DataFrame:
     """直前情報（展示タイム・進入コース・風速・波高）の特徴量を足す。
     pre は PRE_COLS を持つ表。学習時は成績ファイルの値（展示タイム・本番の進入・レース時の風と波）を使い、
     本番では締切前の直前情報（展示タイム・スタート展示の進入・その時点の風と波）を渡す。"""
@@ -152,7 +152,11 @@ def add_pre(feat: pd.DataFrame, pre: pd.DataFrame, results: pd.DataFrame) -> pd.
     out["exhibit_diff"] = out["exhibit_time"] - g["exhibit_time"].transform("mean")
     out["exhibit_rank"] = g["exhibit_time"].rank(ascending=True, method="average", na_option="bottom")
     out["course_shift"] = out["course"] - out["boat_no"]
-    out["cw_course"] = _course_rate(out, results, col="course")
+    if rates is not None:  # 本番用：朝に保存した 場×コースの1着率 を使う
+        out["cw_course"] = [rates.get(v, rates["_all"])[int(c) - 1] if c == c and 1 <= c <= 6 else np.nan
+                            for v, c in zip(out["venue_code"], out["course"])]
+    else:
+        out["cw_course"] = _course_rate(out, results, col="course")
     out[PRE_FEATURES] = out[PRE_FEATURES].astype("float32")
     return out
 

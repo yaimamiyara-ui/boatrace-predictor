@@ -16,6 +16,10 @@ on:
         description: "対象日 YYYY-MM-DD（空欄で自動）"
         required: false
         default: ""
+      dry_run:
+        description: "true なら予想を保存せず表示だけ（predictのみ）"
+        required: false
+        default: "false"
 
 concurrency:
   group: gdrive-parquet-write
@@ -39,10 +43,12 @@ jobs:
           SCHED: ${{ github.event.schedule }}
           IN_MODE: ${{ inputs.mode }}
           IN_DATE: ${{ inputs.date }}
+          IN_DRY: ${{ inputs.dry_run }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           if [ "$EVENT" = "workflow_dispatch" ]; then MODE="$IN_MODE"; DAY="$IN_DATE";
           elif [ "$SCHED" = "21 22 * * *" ]; then MODE=settle; DAY="";
           else MODE=predict; DAY=""; fi
           if [ "$MODE" = "settle" ]; then S=scripts/settle.py; else S=scripts/predict_today.py; fi
-          if [ -n "$DAY" ]; then python "$S" --date "$DAY"; else python "$S"; fi
+          EXTRA=""; if [ "$MODE" = "predict" ] && [ "$IN_DRY" = "true" ]; then EXTRA="--dry-run"; fi
+          if [ -n "$DAY" ]; then python "$S" $EXTRA --date "$DAY"; else python "$S" $EXTRA; fi

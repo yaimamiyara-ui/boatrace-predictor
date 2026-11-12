@@ -23,6 +23,7 @@ JST = timezone(timedelta(hours=9))
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--date", default=None)
+    p.add_argument("--dry-run", action="store_true", help="予想を保存せず、結果だけ表示する")
     a = p.parse_args()
     d = datetime.strptime(a.date, "%Y-%m-%d").date() if a.date else datetime.now(JST).date()
     ds = d.isoformat()
@@ -42,14 +43,17 @@ def main() -> None:
     pred = None
     if active.get("model") == "v1":
         try:
-            pred = predict_v1(prog, d, active.get("window", "5y"))
+            pred = predict_v1(prog, d, active.get("window", "10y"), save=not a.dry_run)
         except Exception as e:  # v1が使えないときはv0で予想する（予想を欠かさないため）
             print(f"[PREDICT] v1で予想できなかったためv0を使います: {type(e).__name__}: {e}")
     if pred is None:
         pred = predict_v0(prog, d)
 
-    write_remote_parquet(pred, f"predictions/{d:%Y}/{ds}.parquet")
-    print(f"[PREDICT] {ds} races={len(pred)} model={pred['model_ver'].iloc[0]}")
+    P = pred[[f"p{i}" for i in range(1, 7)]].to_numpy()
+    print(f"[PREDICT] {ds} races={len(pred)} model={pred['model_ver'].iloc[0]} window={pred['data_window'].iloc[0]} "
+          f"平均p1={P[:, 0].mean():.3f} 合計1={bool(abs(P.sum(axis=1) - 1).max() < 1e-6)} dry_run={a.dry_run}")
+    if not a.dry_run:
+        write_remote_parquet(pred, f"predictions/{d:%Y}/{ds}.parquet")
 
 
 def predict_v0(prog: pd.DataFrame, d) -> pd.DataFrame:
@@ -64,7 +68,7 @@ def predict_v0(prog: pd.DataFrame, d) -> pd.DataFrame:
     return v0.predict_program(prog, rates, alpha)
 
 
-def predict_v1(prog: pd.DataFrame, d, window: str) -> pd.DataFrame:
+def predict_v1(prog: pd.DataFrame, d, window: str, save: bool = True) -> pd.DataFrame:
     import subprocess
     from model import features, v1
     from storage.gdrive import GDRIVE_ROOT
@@ -77,6 +81,16 @@ def predict_v1(prog: pd.DataFrame, d, window: str) -> pd.DataFrame:
     feat = features.build(prog, results[results["date"] < ds])
     if feat.empty:
         raise ValueError("6艇そろったレースがありません")
+    if save:
+        # 締切前に直前情報で確率を更新するときに使うので、当日の特徴量と 場×コースの1着率 を保存しておく
+        import tempfile
+        write_remote_parquet(feat, f"live/features/{d:%Y}/{ds}.parquet")
+        rates = v0.course_win_rates(results, f"{ds[:7]}-01")
+        with tempfile.TemporaryDirectory() as tmp:
+            f = Path(tmp) / "rates.json"
+            f.write_text(json.dumps(rates), encoding="utf-8")
+            subprocess.run(["rclone", "copyto", str(f), f"{GDRIVE_ROOT}/data/live/features/{d:%Y}/{ds}_rates.json"],
+                           check=True, capture_output=True)
     return v1.predict_frame(booster, T, feat, window)
 
 
