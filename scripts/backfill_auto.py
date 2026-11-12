@@ -30,7 +30,18 @@ def done_months() -> set[str]:
 
 
 def mark_done(ym: str) -> None:
-    subprocess.run(["rclone", "touch", f"{DONE_DIR}/{ym}"], check=True, capture_output=True, text=True)
+    """取り終えた月の印を置く。並列実行で _done フォルダが重複作成された場合は統合してから再試行する
+    （Googleドライブは同名フォルダを複数作れるため）。"""
+    for attempt in range(3):
+        res = subprocess.run(["rclone", "touch", f"{DONE_DIR}/{ym}"], capture_output=True, text=True)
+        if res.returncode == 0:
+            return
+        subprocess.run(
+            ["rclone", "dedupe", "--dedupe-mode", "merge", f"{GDRIVE_ROOT}/data"],
+            capture_output=True, text=True,
+        )
+        time.sleep(5 * (attempt + 1))
+    print(f"[AUTO] {ym} の完了印を付けられませんでした（データは保存済み。次回は再確認だけ行います）", flush=True)
 
 
 def all_months(last_day: date) -> list[str]:
