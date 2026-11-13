@@ -1,7 +1,7 @@
 """当日データの記録（Claude追加）。
 
 mode=schedule : 当日の開催場と締切時刻を取得して保存
-mode=prerace  : 締切まで残り3〜25分のレースについて、3連単オッズと直前情報を保存（未記録のレースだけ）
+mode=prerace  : 締切まで残り4〜14分のレースについて、展示タイムがそろい次第、3連単オッズと直前情報を保存（1レース1回）
 mode=final    : 当日の全レースの確定3連単オッズを保存（夜に実行）
 
 保存先（Googleドライブ）:
@@ -26,7 +26,11 @@ from fetch import live_pages
 from storage.gdrive import GDRIVE_ROOT
 
 JST = timezone(timedelta(hours=9))
-WINDOW_MIN = (3, 25)  # 締切まで残り何分のレースを対象にするか
+# 締切まで残り何分のレースを対象にするか。
+# 展示タイムは締切の15〜25分前にはまだ出ていないことが多い（2026-11-13の実績：14レース中2レースのみ）ため、
+# 5分おきに見て、展示タイムがそろったら記録する。そろわなくても残り LAST_CHANCE_MIN 分以下になったら記録する。
+WINDOW_MIN = (4, 14)
+LAST_CHANCE_MIN = 9
 
 
 def _remote(kind: str, d: date) -> str:
@@ -100,10 +104,17 @@ def mode_prerace(d: date, now: datetime) -> None:
             targets.append((r, dl))
 
     odds_rows, info_rows = [], []
+    waiting = 0
     for r, dl in targets:
+        info = live_pages.beforeinfo(d, r.venue_code, r.race_no)
+        boats = info.get("boats", []) if info else []
+        has_exhibit = len(boats) == 6 and all(b.get("exhibit_time") is not None for b in boats)
+        left_now = (dl - datetime.now(JST)).total_seconds() / 60
+        if not has_exhibit and left_now > LAST_CHANCE_MIN:
+            waiting += 1   # 展示タイム待ち。次の回（5分後）にもう一度見る
+            continue
         fetched = datetime.now(JST)
         odds = live_pages.odds3t(d, r.venue_code, r.race_no)
-        info = live_pages.beforeinfo(d, r.venue_code, r.race_no)
         left = round((dl - fetched).total_seconds() / 60, 1)
         for combo, v in odds.items():
             odds_rows.append({"race_id": r.race_id, "combo": combo, "odds": v,
@@ -124,7 +135,8 @@ def mode_prerace(d: date, now: datetime) -> None:
     n1 = append_day("odds_pre", d, pd.DataFrame(odds_rows))
     n2 = append_day("beforeinfo", d, pd.DataFrame(info_rows))
     n3 = record_recommendations(d, pd.DataFrame(odds_rows), pd.DataFrame(info_rows))
-    print(f"[PRERACE] races={len(targets)} odds_rows={n1} beforeinfo_rows={n2} recommendations={n3}", flush=True)
+    print(f"[PRERACE] 展示タイム待ちで次回に回したレース={waiting}", flush=True)
+    print(f"[PRERACE] races={len(targets) - waiting} odds_rows={n1} beforeinfo_rows={n2} recommendations={n3}", flush=True)
 
 
 STAKE_YEN = 100

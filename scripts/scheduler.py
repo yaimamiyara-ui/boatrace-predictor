@@ -6,7 +6,7 @@
   07:21 daily-model settle（前日分の答え合わせ）
   07:41 live-record schedule（締切時刻）
   07:51 daily-model predict（当日の予想）
-  08:03〜23:53 の10分おき live-record prerace（締切前オッズ・直前情報・推奨）
+  08:03〜23:58 の5分おき live-record prerace（締切前オッズ・直前情報・推奨）
   23:30 daily-fetch（前日分の公式データ）
   00:21 live-record final（前日の確定オッズ）
 """
@@ -34,7 +34,7 @@ def fixed_slots():
         (0, 21, "live-record.yml", {"mode": "final", "date": "YESTERDAY"}),
     ]
     for h in range(8, 24):
-        for m in (3, 13, 23, 33, 43, 53):
+        for m in range(3, 60, 5):
             s.append((h, m, "live-record.yml", {"mode": "prerace", "date": ""}))
     return s
 
