@@ -1,61 +1,34 @@
+"""公式の日別ファイル（番組表B・競走成績K、LZH圧縮）を読む。
+
+GitHub Actionsからは公式サイトにアクセスしない（2026-11-18にサイト側から403で遮断されたため）。
+自宅PCの pc/fetch_day.ps1 が1日1回ダウンロードしてGoogleドライブの data/raw/lzh/ に置いたファイルを読む。
+"""
 import io
-import os
-import time
+import subprocess
+import tempfile
 from datetime import date
+from pathlib import Path
 from typing import Optional
-import requests
+
 import lhafile
 
-BASE_URL_B = "https://www1.mbrace.or.jp/od2/B/{yyyy}{mm}/b{yy}{mm}{dd}.lzh"
-BASE_URL_K = "https://www1.mbrace.or.jp/od2/K/{yyyy}{mm}/k{yy}{mm}{dd}.lzh"
+RAW_ROOT = "gdrive:boatrace-predictor/data/raw"
 
 
-def download_and_extract_lzh(
-    target_date: date,
-    file_type: str,
-    sleep_sec: float = float(os.environ.get("FETCH_SLEEP_SEC", "3.2")),
-    max_retries: int = 3,
-) -> Optional[str]:
-    """
-    指定日のB(番組表)またはK(競走成績)のLZHをダウンロードし、解凍後のテキスト(str)を返す。
-    404(開催なし・未公開)の場合はNoneを返す。
-    """
-    yyyy = target_date.strftime("%Y")
-    yy = target_date.strftime("%y")
-    mm = target_date.strftime("%m")
-    dd = target_date.strftime("%d")
-
-    if file_type.upper() == "B":
-        url = BASE_URL_B.format(yyyy=yyyy, yy=yy, mm=mm, dd=dd)
-    elif file_type.upper() == "K":
-        url = BASE_URL_K.format(yyyy=yyyy, yy=yy, mm=mm, dd=dd)
-    else:
+def download_and_extract_lzh(target_date: date, file_type: str) -> Optional[str]:
+    """指定日のB(番組表)またはK(競走成績)を、Googleドライブの生ファイルから読んでテキストで返す。
+    まだ置かれていなければ None（関数名は以前のまま）。"""
+    t = file_type.lower()
+    if t not in ("b", "k"):
         raise ValueError(f"Invalid file_type: {file_type}")
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; BoatracePredictor/1.0)"
-    }
-
-    for attempt in range(1, max_retries + 1):
-        time.sleep(sleep_sec)
-        try:
-            resp = requests.get(url, headers=headers, timeout=30)
-            if resp.status_code == 404:
-                return None
-            resp.raise_for_status()
-
-            bio = io.BytesIO(resp.content)
-            lzh = lhafile.Lhafile(bio)
-            namelist = lzh.namelist()
-            if not namelist:
-                return None
-
-            raw_bytes = lzh.read(namelist[0])
-            return raw_bytes.decode("cp932", errors="replace")
-
-        except requests.RequestException:
-            if attempt == max_retries:
-                raise
-            time.sleep(sleep_sec * attempt)
-
-    return None
+    name = f"{t}{target_date:%y%m%d}.lzh"
+    with tempfile.TemporaryDirectory() as tmp:
+        local = Path(tmp) / name
+        r = subprocess.run(["rclone", "copyto", f"{RAW_ROOT}/lzh/{name}", str(local)], capture_output=True, text=True)
+        if r.returncode != 0 or not local.exists() or local.stat().st_size == 0:
+            return None
+        lzh = lhafile.Lhafile(io.BytesIO(local.read_bytes()))
+        names = lzh.namelist()
+        if not names:
+            return None
+        return lzh.read(names[0]).decode("cp932", errors="replace")

@@ -1,14 +1,14 @@
-"""当日データの記録（Claude追加）。
+"""当日データの記録（Claude実装）。公式サイトにはアクセスせず、自宅PCがGoogleドライブに置いた生ファイルを読む。
 
-mode=schedule : 当日の開催場と締切時刻を取得して保存
-mode=prerace  : 締切まで残り4〜14分のレースについて、展示タイムがそろい次第、3連単オッズと直前情報を保存（1レース1回）
-mode=final    : 当日の全レースの確定3連単オッズを保存（夜に実行）
+mode=schedule : 開催場と締切時刻を保存し、締切前オッズを取るレース（1日20、無作為）を決めて監視リストを書く
+mode=prerace  : 監視リストのレースのうち、自宅PCが直前情報とオッズを取得済みのものを保存し、推奨を記録（1レース1回）
+mode=final    : 監視リストのレースの確定3連単オッズを保存
 
-保存先（Googleドライブ）:
-  data/live/schedule/YYYY/YYYY-MM-DD.parquet     race_id, venue_code, race_no, deadline
-  data/live/odds_pre/YYYY/YYYY-MM-DD.parquet     race_id, combo, odds, fetched_at, minutes_to_deadline
-  data/live/beforeinfo/YYYY/YYYY-MM-DD.parquet   race_id, boat_no, weight, exhibit_time, tilt, ... , fetched_at
-  data/live/odds_final/YYYY/YYYY-MM-DD.parquet   race_id, combo, odds, fetched_at
+保存先（Googleドライブ data/live/）:
+  schedule/YYYY/YYYY-MM-DD.parquet     race_id, venue_code, race_no, deadline, watch
+  odds_pre/YYYY/YYYY-MM-DD.parquet     race_id, combo, odds, fetched_at, minutes_to_deadline
+  beforeinfo/YYYY/YYYY-MM-DD.parquet   race_id, boat_no, weight, exhibit_time, tilt, ... , fetched_at
+  odds_final/YYYY/YYYY-MM-DD.parquet   race_id, combo, odds, fetched_at
 """
 import argparse
 import json
@@ -26,13 +26,6 @@ from fetch import live_pages
 from storage.gdrive import GDRIVE_ROOT
 
 JST = timezone(timedelta(hours=9))
-# 締切まで残り何分のレースを対象にするか。
-# 展示タイムは締切の15〜25分前にはまだ出ていないことが多い（2026-11-13の実績：14レース中2レースのみ）ため、
-# 5分おきに見て、展示タイムがそろったら記録する。そろわなくても残り LAST_CHANCE_MIN 分以下になったら記録する。
-WINDOW_MIN = (4, 14)
-LAST_CHANCE_MIN = 9
-
-
 def _remote(kind: str, d: date) -> str:
     return f"{GDRIVE_ROOT}/data/live/{kind}/{d:%Y}/{d:%Y-%m-%d}.parquet"
 
@@ -62,7 +55,12 @@ def race_id(d: date, jcd: str, rno: int) -> str:
     return f"{d:%Y%m%d}_{jcd}_{rno:02d}"
 
 
+WATCH_PER_DAY = 20          # 1日に締切前オッズを取るレース数（公式サイトへのアクセスを抑えるため）
+WATCH_FROM = "08:50"        # これより前に締切のレースは対象外（PCが監視リストを受け取る時間が要るため）
+
+
 def build_schedule(d: date) -> pd.DataFrame:
+    """自宅PCが置いた index.html / racelist_*.html から、当日の全レースの締切時刻を作る"""
     rows = []
     for jcd in live_pages.venues_today(d):
         for rno, hhmm in live_pages.deadlines(d, jcd).items():
@@ -70,50 +68,67 @@ def build_schedule(d: date) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def choose_watch(sch: pd.DataFrame, d: date) -> pd.Series:
+    """締切前オッズを取るレースを無作為に選ぶ（日付で固定した乱数。偏りなく検証するため）"""
+    ok = sch[sch["deadline"].str.zfill(5) >= WATCH_FROM]
+    pick = ok.sample(n=min(WATCH_PER_DAY, len(ok)), random_state=int(f"{d:%Y%m%d}")) if len(ok) else ok
+    return sch["race_id"].isin(set(pick["race_id"]))
+
+
 def get_schedule(d: date) -> pd.DataFrame:
     sch = load_day("schedule", d)
-    if sch.empty:
-        sch = build_schedule(d)
-        if not sch.empty:
-            append_day("schedule", d, sch)
+    if not sch.empty and "watch" not in sch.columns:   # 旧形式（全レース取得していた頃）の予定表
+        sch["watch"] = False
     return sch
 
 
 def mode_schedule(d: date) -> None:
-    sch = load_day("schedule", d)
-    if sch.empty:
-        sch = build_schedule(d)
-        append_day("schedule", d, sch)
-    print(f"[SCHEDULE] {d} venues={sch['venue_code'].nunique() if not sch.empty else 0} races={len(sch)}", flush=True)
+    sch = get_schedule(d)
+    if not sch.empty:
+        print(f"[SCHEDULE] {d} 作成済み races={len(sch)} watch={int(sch['watch'].sum())}", flush=True)
+        return
+    live_pages.sync_raw(d)
+    sch = build_schedule(d)
+    if sch.empty or not all(live_pages.has_file(d, f"racelist_{v}.html") for v in live_pages.venues_today(d)):
+        print(f"[SCHEDULE] {d} 自宅PCからの開催情報がまだありません（次回もう一度確認）", flush=True)
+        return
+    sch["watch"] = choose_watch(sch, d)
+    append_day("schedule", d, sch)
+    # 自宅PCが読む監視リスト
+    w = sch[sch["watch"]].sort_values("deadline")
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / "watchlist.csv"
+        w.assign(jcd=w["venue_code"], rno=w["race_no"])[["jcd", "rno", "deadline"]].to_csv(f, index=False, encoding="utf-8")
+        subprocess.run(["rclone", "copyto", str(f), f"{live_pages.RAW_ROOT}/live/{d:%Y-%m-%d}/watchlist.csv"],
+                       check=True, capture_output=True, text=True)
+    print(f"[SCHEDULE] {d} venues={sch['venue_code'].nunique()} races={len(sch)} watch={len(w)}", flush=True)
+
+
+def _deadline(d: date, hhmm: str) -> datetime:
+    h, m = map(int, hhmm.split(":"))
+    return datetime(d.year, d.month, d.day, h, m, tzinfo=JST)
 
 
 def mode_prerace(d: date, now: datetime) -> None:
     sch = get_schedule(d)
     if sch.empty:
-        print("[PRERACE] 本日の開催なし", flush=True)
+        print("[PRERACE] 本日の予定がまだありません", flush=True)
         return
+    live_pages.sync_raw(d)
+    times = live_pages.file_times(d)
     done = load_day("odds_pre", d)
     done_ids = set(done["race_id"].unique()) if not done.empty else set()
 
     targets = []
-    for r in sch.itertuples():
-        h, m = map(int, r.deadline.split(":"))
-        dl = datetime(d.year, d.month, d.day, h, m, tzinfo=JST)
-        left = (dl - now).total_seconds() / 60
-        if WINDOW_MIN[0] < left <= WINDOW_MIN[1] and r.race_id not in done_ids:
-            targets.append((r, dl))
+    for r in sch[sch["watch"]].itertuples():
+        of, bf = f"odds3t_{r.venue_code}_{r.race_no}.html", f"beforeinfo_{r.venue_code}_{r.race_no}.html"
+        if r.race_id not in done_ids and live_pages.has_file(d, of) and live_pages.has_file(d, bf):
+            targets.append((r, _deadline(d, r.deadline), times.get(of)))
 
     odds_rows, info_rows = [], []
-    waiting = 0
-    for r, dl in targets:
+    for r, dl, got in targets:
         info = live_pages.beforeinfo(d, r.venue_code, r.race_no)
-        boats = info.get("boats", []) if info else []
-        has_exhibit = len(boats) == 6 and all(b.get("exhibit_time") is not None for b in boats)
-        left_now = (dl - datetime.now(JST)).total_seconds() / 60
-        if not has_exhibit and left_now > LAST_CHANCE_MIN:
-            waiting += 1   # 展示タイム待ち。次の回（5分後）にもう一度見る
-            continue
-        fetched = datetime.now(JST)
+        fetched = got.astimezone(JST) if got else datetime.now(JST)   # 自宅PCが取得した時刻
         odds = live_pages.odds3t(d, r.venue_code, r.race_no)
         left = round((dl - fetched).total_seconds() / 60, 1)
         for combo, v in odds.items():
@@ -135,8 +150,7 @@ def mode_prerace(d: date, now: datetime) -> None:
     n1 = append_day("odds_pre", d, pd.DataFrame(odds_rows))
     n2 = append_day("beforeinfo", d, pd.DataFrame(info_rows))
     n3 = record_recommendations(d, pd.DataFrame(odds_rows), pd.DataFrame(info_rows))
-    print(f"[PRERACE] 展示タイム待ちで次回に回したレース={waiting}", flush=True)
-    print(f"[PRERACE] races={len(targets) - waiting} odds_rows={n1} beforeinfo_rows={n2} recommendations={n3}", flush=True)
+    print(f"[PRERACE] races={len(targets)} odds_rows={n1} beforeinfo_rows={n2} recommendations={n3}", flush=True)
 
 
 STAKE_YEN = 100
@@ -255,17 +269,25 @@ def append_day_rel(rel: str, new: pd.DataFrame) -> int:
 
 def mode_final(d: date) -> None:
     sch = get_schedule(d)
+    if sch.empty:
+        print("[FINAL] 予定なし", flush=True)
+        return
+    live_pages.sync_raw(d)
+    times = live_pages.file_times(d)
     done = load_day("odds_final", d)
     done_ids = set(done["race_id"].unique()) if not done.empty else set()
-    rows = []
-    for r in sch.itertuples():
-        if r.race_id in done_ids:
+    rows, n = [], 0
+    for r in sch[sch["watch"]].itertuples():
+        name = f"odds3tfinal_{r.venue_code}_{r.race_no}.html"
+        if r.race_id in done_ids or not live_pages.has_file(d, name):
             continue
-        fetched = datetime.now(JST).isoformat(timespec="seconds")
-        for combo, v in live_pages.odds3t(d, r.venue_code, r.race_no).items():
+        got = times.get(name)
+        fetched = (got.astimezone(JST) if got else datetime.now(JST)).isoformat(timespec="seconds")
+        n += 1
+        for combo, v in live_pages.odds3t(d, r.venue_code, r.race_no, final=True).items():
             rows.append({"race_id": r.race_id, "combo": combo, "odds": v, "fetched_at": fetched})
-    n = append_day("odds_final", d, pd.DataFrame(rows))
-    print(f"[FINAL] races={len(sch) - len(done_ids)} odds_rows={n}", flush=True)
+    k = append_day("odds_final", d, pd.DataFrame(rows))
+    print(f"[FINAL] races={n} odds_rows={k}", flush=True)
 
 
 def main() -> None:

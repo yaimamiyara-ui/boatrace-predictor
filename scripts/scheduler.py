@@ -1,14 +1,11 @@
-"""時計役（Claude実装）。GitHubの定時起動（schedule）がこのリポジトリで動かないため、その代わりに
-1本のジョブが時刻を見て各ワークフローを呼び出す。約5時間40分たったら次の時計役を呼んで終了する。
+"""時計役（Claude実装）。1本のジョブが時刻を見て各ワークフローを呼び出す。約5時間40分たったら次の時計役を呼んで終了する。
 
-呼び出す時刻（日本時間）:
-  05:17 backfill-auto（過去データの取りこぼし確認）
-  07:21 daily-model settle（前日分の答え合わせ）
-  07:41 live-record schedule（締切時刻）
-  07:51 daily-model predict（当日の予想）
-  08:03〜23:58 の5分おき live-record prerace（締切前オッズ・直前情報・推奨）
-  23:30 daily-fetch（前日分の公式データ）
-  00:21 live-record final（前日の確定オッズ）
+呼び出す処理（日本時間）。どれもGoogleドライブだけを読み、公式サイトにはアクセスしない:
+  07:45ほか  daily-model settle（前日分の答え合わせ）
+  07:51ほか  daily-model predict（当日の予想）
+  07:36〜    live-record schedule（締切時刻と監視リスト）
+  08:43〜23:58 の5分おき live-record prerace（自宅PCが取得済みのレースの記録と推奨）
+  23:45, 00:21 live-record final（確定オッズ）
 """
 import os
 import time
@@ -24,18 +21,21 @@ CATCHUP_MIN = 5  # 起動直後は、直前5分以内に過ぎた予定も実行
 
 
 def fixed_slots():
-    """(時, 分, ワークフロー, inputs)"""
-    s = [
-        (5, 17, "backfill-auto.yml", {}),
-        (7, 21, "daily-model.yml", {"mode": "settle", "date": ""}),
-        (7, 41, "live-record.yml", {"mode": "schedule", "date": ""}),
-        (7, 51, "daily-model.yml", {"mode": "predict", "date": ""}),
-        (23, 30, "daily-fetch.yml", {"target_date": ""}),
-        (0, 21, "live-record.yml", {"mode": "final", "date": "YESTERDAY"}),
-    ]
+    """(時, 分, ワークフロー, inputs)。どの処理もGoogleドライブだけを読み、公式サイトにはアクセスしない。
+    自宅PC（pc/fetch_day.ps1）が7:25から生ファイルを置くので、届くのが遅れても拾えるよう何度か呼ぶ（どれも済んでいれば何もしない）"""
+    s = []
+    for h, m in ((7, 45), (9, 45), (12, 45)):
+        s.append((h, m, "daily-model.yml", {"mode": "settle", "date": ""}))
+    for h, m in ((7, 51), (8, 21), (9, 1)):
+        s.append((h, m, "daily-model.yml", {"mode": "predict", "date": ""}))
+    for h, m in ((7, 36), (7, 46), (7, 56), (8, 6), (8, 16), (8, 36), (9, 6)):
+        s.append((h, m, "live-record.yml", {"mode": "schedule", "date": ""}))
     for h in range(8, 24):
         for m in range(3, 60, 5):
-            s.append((h, m, "live-record.yml", {"mode": "prerace", "date": ""}))
+            if (h, m) >= (8, 43):
+                s.append((h, m, "live-record.yml", {"mode": "prerace", "date": ""}))
+    s.append((23, 45, "live-record.yml", {"mode": "final", "date": ""}))
+    s.append((0, 21, "live-record.yml", {"mode": "final", "date": "YESTERDAY"}))
     return s
 
 

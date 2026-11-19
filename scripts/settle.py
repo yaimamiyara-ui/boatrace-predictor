@@ -121,18 +121,36 @@ def notify_discord(text: str) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--date", default=None, help="YYYY-MM-DD（省略時はJSTの前日）")
+    p.add_argument("--date", default=None, help="YYYY-MM-DD（省略時はJSTの前日までの3日分。済んだ日は飛ばす）")
     a = p.parse_args()
-    d = datetime.strptime(a.date, "%Y-%m-%d").date() if a.date else (datetime.now(JST) - timedelta(days=1)).date()
+    if a.date:
+        days = [datetime.strptime(a.date, "%Y-%m-%d").date()]
+    else:
+        today = datetime.now(JST).date()
+        days = [today - timedelta(days=k) for k in (3, 2, 1)]
+    for d in days:
+        settle_day(d)
+
+
+def settle_day(d) -> None:
     ds = d.isoformat()
 
-    run_backfill(ds, ds)  # 前日の成績がまだ無ければ取得
+    if not read_remote_parquet(f"settled/predictions/{d:%Y}/{ds}.parquet").empty:
+        print(f"[SETTLE] {ds} 答え合わせ済み")
+        return
+    run_backfill(ds, ds)  # 自宅PCが置いた成績ファイルを取り込む
     sync_category("results", [d.year])
     sync_category("payouts", [d.year])
     results = read_category("results", ds, ds)
     payouts = read_category("payouts", ds, ds)
+    if results.empty:
+        print(f"[SETTLE] {ds} 成績がまだありません（自宅PCからの取得待ち）")
+        return
 
     pred = read_remote_parquet(f"predictions/{d:%Y}/{ds}.parquet")
+    if pred.empty:
+        print(f"[SETTLE] {ds} 成績を取り込みました（この日は予想の記録なし）")
+        return
     sp = settle_predictions(pred, results) if not pred.empty else pd.DataFrame()
     if not sp.empty:
         write_remote_parquet(sp, f"settled/predictions/{d:%Y}/{ds}.parquet")

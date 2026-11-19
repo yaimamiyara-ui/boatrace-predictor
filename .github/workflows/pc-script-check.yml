@@ -1,0 +1,32 @@
+name: PC Script Check
+
+# 自宅PC用スクリプト（pc/*.ps1）を Windows PowerShell 5.1 で構文確認し、-DryRun で流す。
+# -DryRun は公式サイトにもGoogleドライブにもアクセスしない（rcloneは偽物に差し替える）。
+on:
+  workflow_dispatch:
+  push:
+    paths: ["pc/**", ".github/workflows/pc-script-check.yml"]
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and dry-run
+        shell: powershell
+        run: |
+          $PSVersionTable.PSVersion.ToString()
+          foreach ($f in Get-ChildItem pc\*.ps1) {
+            $errs = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errs)
+            if ($errs.Count) { $errs | ForEach-Object { Write-Host "$($f.Name): $_" }; exit 1 }
+            Write-Host "parse OK $($f.Name)"
+          }
+          Set-Content -Path fake_rclone.cmd -Value "@echo off`r`necho b991231.lzh`r`necho warn 1>&2`r`nexit /b 0" -Encoding ASCII
+          powershell -NoProfile -ExecutionPolicy Bypass -File pc\fetch_day.ps1 -DryRun -Rclone "$PWD\fake_rclone.cmd"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $log = Get-Content "$env:LOCALAPPDATA\boatrace-fetch\log\*.log"
+          $n = @($log | Select-String "DRYRUN GET").Count
+          Write-Host "dry-run requests=$n"
+          if ($n -lt 5 -or $n -gt 10) { exit 1 }

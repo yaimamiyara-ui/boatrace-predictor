@@ -1,33 +1,58 @@
-"""公式サイト（boatrace.jp）の当日ページから、締切時刻・3連単オッズ・直前情報を読む。"""
-import os
+"""公式サイト（boatrace.jp）の当日ページ（締切時刻・3連単オッズ・直前情報）を読む。
+
+GitHub Actionsからは公式サイトにアクセスしない。自宅PCの pc/fetch_day.ps1 が少ない回数だけ取得して
+Googleドライブの data/raw/live/YYYY-MM-DD/ に置いたHTMLを、sync_raw() で手元に写してから読む。
+"""
+import json
 import re
-import time
-from datetime import date
+import subprocess
+from datetime import date, datetime
 from itertools import permutations
+from pathlib import Path
 from typing import Optional
 
-import requests
 from bs4 import BeautifulSoup
 
-BASE = "https://www.boatrace.jp/owpc/pc/race"
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; BoatracePredictor/1.0)"}
-SLEEP_SEC = float(os.environ.get("LIVE_SLEEP_SEC", "1.5"))
+RAW_ROOT = "gdrive:boatrace-predictor/data/raw"
+CACHE = Path("cache") / "raw"
 
 
-def _get(path: str, params: dict, retries: int = 3) -> Optional[BeautifulSoup]:
-    for attempt in range(1, retries + 1):
-        time.sleep(SLEEP_SEC)
+def raw_dir(d: date) -> Path:
+    return CACHE / f"{d:%Y-%m-%d}"
+
+
+def sync_raw(d: date) -> Path:
+    """その日の生ファイルをGoogleドライブから手元に写す"""
+    local = raw_dir(d)
+    local.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["rclone", "copy", f"{RAW_ROOT}/live/{d:%Y-%m-%d}", str(local), "--transfers", "8"],
+                   capture_output=True, text=True)
+    return local
+
+
+def file_times(d: date) -> dict[str, datetime]:
+    """{ファイル名: 取得時刻（Googleドライブ上の更新時刻）}"""
+    r = subprocess.run(["rclone", "lsjson", f"{RAW_ROOT}/live/{d:%Y-%m-%d}"], capture_output=True, text=True)
+    if r.returncode != 0:
+        return {}
+    out = {}
+    for it in json.loads(r.stdout or "[]"):
         try:
-            r = requests.get(f"{BASE}/{path}", params=params, headers=HEADERS, timeout=30)
-            if r.status_code == 404:
-                return None
-            r.raise_for_status()
-            return BeautifulSoup(r.text, "lxml")
-        except requests.RequestException:
-            if attempt == retries:
-                raise
-            time.sleep(SLEEP_SEC * attempt * 2)
-    return None
+            out[it["Name"]] = datetime.fromisoformat(it["ModTime"].replace("Z", "+00:00"))
+        except (KeyError, ValueError):
+            pass
+    return out
+
+
+def has_file(d: date, name: str) -> bool:
+    f = raw_dir(d) / name
+    return f.exists() and f.stat().st_size > 0
+
+
+def _file(d: date, name: str) -> Optional[BeautifulSoup]:
+    if not has_file(d, name):
+        return None
+    return BeautifulSoup((raw_dir(d) / name).read_bytes(), "lxml")
 
 
 def _hd(d: date) -> str:
@@ -41,7 +66,7 @@ def _f(text: str) -> Optional[float]:
 
 def venues_today(d: date) -> list[str]:
     """当日開催の場コード一覧"""
-    soup = _get("index", {"hd": _hd(d)})
+    soup = _file(d, "index.html")
     if soup is None:
         return []
     codes = set()
@@ -54,7 +79,7 @@ def venues_today(d: date) -> list[str]:
 
 def deadlines(d: date, jcd: str) -> dict[int, str]:
     """{レース番号: 'HH:MM'} 締切予定時刻"""
-    soup = _get("racelist", {"rno": 1, "jcd": jcd, "hd": _hd(d)})
+    soup = _file(d, f"racelist_{jcd}.html")
     if soup is None:
         return {}
     for tr in soup.select("table tr"):
@@ -80,9 +105,9 @@ def _odds3t_order() -> list[str]:
 _ODDS3T_ORDER = _odds3t_order()
 
 
-def odds3t(d: date, jcd: str, rno: int) -> dict[str, Optional[float]]:
+def odds3t(d: date, jcd: str, rno: int, final: bool = False) -> dict[str, Optional[float]]:
     """{'1-2-3': 23.0, ...} 120通り。欠場などで売られない目はNone"""
-    soup = _get("odds3t", {"rno": rno, "jcd": jcd, "hd": _hd(d)})
+    soup = _file(d, f"odds3t{'final' if final else ''}_{jcd}_{rno}.html")
     if soup is None:
         return {}
     cells = soup.select("td.oddsPoint")
@@ -97,7 +122,7 @@ def odds3t(d: date, jcd: str, rno: int) -> dict[str, Optional[float]]:
 
 def beforeinfo(d: date, jcd: str, rno: int) -> dict:
     """直前情報。{'boats': [{boat_no, weight, exhibit_time, tilt, parts}], 'weather': {...}, 'start_exhibit': [...]}"""
-    soup = _get("beforeinfo", {"rno": rno, "jcd": jcd, "hd": _hd(d)})
+    soup = _file(d, f"beforeinfo_{jcd}_{rno}.html")
     if soup is None:
         return {}
     boats = []

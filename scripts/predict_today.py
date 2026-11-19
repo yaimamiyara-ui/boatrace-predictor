@@ -15,7 +15,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 from fetch.official_files import download_and_extract_lzh
 from fetch.parse_program import parse_program_text
 from model import v0
-from storage.gdrive import read_category, sync_category, upsert_monthly_parquet, write_remote_parquet
+from storage.gdrive import read_category, read_remote_parquet, sync_category, upsert_monthly_parquet, write_remote_parquet
 
 JST = timezone(timedelta(hours=9))
 
@@ -28,9 +28,12 @@ def main() -> None:
     d = datetime.strptime(a.date, "%Y-%m-%d").date() if a.date else datetime.now(JST).date()
     ds = d.isoformat()
 
+    if not a.dry_run and not read_remote_parquet(f"predictions/{d:%Y}/{ds}.parquet").empty:
+        print(f"[PREDICT] {ds} 予想済み")
+        return
     text = download_and_extract_lzh(d, "B")
     if not text:
-        print(f"[PREDICT] {ds} 番組表なし（未公開または開催なし）")
+        print(f"[PREDICT] {ds} 番組表がまだありません（自宅PCからの取得待ち）")
         return
     prog = pd.DataFrame([r.model_dump() for r in parse_program_text(text, d)])
     upsert_monthly_parquet(prog, "program", ds[:7], ["race_id", "boat_no"])
