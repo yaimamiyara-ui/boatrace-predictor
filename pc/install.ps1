@@ -31,8 +31,12 @@ Write-Host "rclone: $rcPath"
 $arg = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$script`" -Rclone `"$rcPath`""
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arg
 $trigger = New-ScheduledTaskTrigger -Daily -At "07:25"
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 18) -MultipleInstances IgnoreNew
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 17) -MultipleInstances IgnoreNew -WakeToRun
 Register-ScheduledTask -TaskName "boatrace-fetch" -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
 Start-ScheduledTask -TaskName "boatrace-fetch"
 Write-Host "OK: task 'boatrace-fetch' registered (daily 07:25) and started." -ForegroundColor Green
 Write-Host "Log: $root\log"
+# Allow wake timers on AC and battery so the 07:25 task can wake the PC from sleep
+powercfg /SETACVALUEINDEX SCHEME_CURRENT 238c9fa8-0aad-41ed-83f4-97be242c8f20 bd3b718a-0680-4d9d-8ab2-e1d2b4ac806d 1 | Out-Null
+powercfg /SETDCVALUEINDEX SCHEME_CURRENT 238c9fa8-0aad-41ed-83f4-97be242c8f20 bd3b718a-0680-4d9d-8ab2-e1d2b4ac806d 1 | Out-Null
+powercfg /SETACTIVE SCHEME_CURRENT | Out-Null

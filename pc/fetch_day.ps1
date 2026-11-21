@@ -118,6 +118,12 @@ function Wait-Until([datetime]$t) {
     }
 }
 
+# Keep the PC awake while this script runs (released automatically when the process ends)
+try {
+    Add-Type -Namespace Win32 -Name Power -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint esFlags);'
+    [void][Win32.Power]::SetThreadExecutionState([uint32]"0x80000001")   # ES_CONTINUOUS | ES_SYSTEM_REQUIRED
+} catch {}
+
 # ---- start ----
 $created = $false
 $script:Mutex = New-Object System.Threading.Mutex($true, "boatrace-fetch-day", [ref]$created)
