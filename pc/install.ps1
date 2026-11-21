@@ -37,6 +37,9 @@ Start-ScheduledTask -TaskName "boatrace-fetch"
 Write-Host "OK: task 'boatrace-fetch' registered (daily 07:25) and started." -ForegroundColor Green
 Write-Host "Log: $root\log"
 # Allow wake timers on AC and battery so the 07:25 task can wake the PC from sleep
-powercfg /SETACVALUEINDEX SCHEME_CURRENT 238c9fa8-0aad-41ed-83f4-97be242c8f20 bd3b718a-0680-4d9d-8ab2-e1d2b4ac806d 1 | Out-Null
-powercfg /SETDCVALUEINDEX SCHEME_CURRENT 238c9fa8-0aad-41ed-83f4-97be242c8f20 bd3b718a-0680-4d9d-8ab2-e1d2b4ac806d 1 | Out-Null
-powercfg /SETACTIVE SCHEME_CURRENT | Out-Null
+$ErrorActionPreference = "Continue"
+try {
+    powercfg /SETACVALUEINDEX SCHEME_CURRENT 238c9fa8-0aad-41ed-83f4-97be242c8f20 bd3b718a-0680-4d9d-8ab2-e1d2b4ac806d 1 | Out-Null 2>&1
+    powercfg /SETDCVALUEINDEX SCHEME_CURRENT 238c9fa8-0aad-41ed-83f4-97be242c8f20 bd3b718a-0680-4d9d-8ab2-e1d2b4ac806d 1 | Out-Null 2>&1
+    powercfg /SETACTIVE SCHEME_CURRENT | Out-Null 2>&1
+} catch {}
