@@ -138,27 +138,29 @@ def test_scratched_boats_in_all_probs_and_trifecta_probs_table():
             assert val > 0.0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "winning_combo_prob clips P with np.clip(P, 1e-12, None) before computing Q2 and Q3 "
-        "without masking P <= 0, so a scratched boat (p=0) placed 2nd or 3rd gets positive probability."
-    ),
+_SCRATCHED_P = np.array([0.45, 0.25, 0.15, 0.10, 0.05, 0.0])  # boat 6 (index 5) scratched
+_WCP_BUG = (
+    "winning_combo_prob clips P with np.clip(P, 1e-12, None) before computing Q2 and Q3 "
+    "without masking P <= 0, so a scratched boat (p=0) placed 2nd or 3rd gets positive probability."
 )
-def test_winning_combo_prob_scratched_boat_1st_2nd_3rd():
-    # Boat 6 (index 5) is scratched (probability 0)
-    p = np.array([0.45, 0.25, 0.15, 0.10, 0.05, 0.0])
-    P = np.vstack([p, p, p])
-    # Place scratched boat 6 (index 5) in 1st, 2nd, and 3rd position
-    idx = np.array([
-        [5, 0, 1],  # Scratched boat 1st (6-1-2)
-        [0, 5, 1],  # Scratched boat 2nd (1-6-2)
-        [0, 1, 5],  # Scratched boat 3rd (1-2-6)
-    ])
-    probs = winning_combo_prob(P, idx, l2=0.9, l3=0.7)
-    assert probs[0] == 0.0
-    assert probs[1] == 0.0
-    assert probs[2] == 0.0
+
+
+def _wcp_single(combo):
+    return winning_combo_prob(_SCRATCHED_P[None, :], np.array([combo]), l2=0.9, l3=0.7)[0]
+
+
+def test_winning_combo_prob_scratched_boat_1st():
+    assert _wcp_single([5, 0, 1]) == 0.0  # 6-1-2
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_WCP_BUG)
+def test_winning_combo_prob_scratched_boat_2nd():
+    assert _wcp_single([0, 5, 1]) == 0.0  # 1-6-2
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_WCP_BUG)
+def test_winning_combo_prob_scratched_boat_3rd():
+    assert _wcp_single([0, 1, 5]) == 0.0  # 1-2-6
 
 
 def test_exactly_three_runnable_boats():
