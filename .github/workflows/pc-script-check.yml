@@ -7,6 +7,9 @@ on:
   push:
     paths: ["pc/**", ".github/workflows/pc-script-check.yml"]
 
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: windows-latest
