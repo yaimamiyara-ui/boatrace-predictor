@@ -139,10 +139,6 @@ def test_scratched_boats_in_all_probs_and_trifecta_probs_table():
 
 
 _SCRATCHED_P = np.array([0.45, 0.25, 0.15, 0.10, 0.05, 0.0])  # boat 6 (index 5) scratched
-_WCP_BUG = (
-    "winning_combo_prob clips P with np.clip(P, 1e-12, None) before computing Q2 and Q3 "
-    "without masking P <= 0, so a scratched boat (p=0) placed 2nd or 3rd gets positive probability."
-)
 
 
 def _wcp_single(combo):
@@ -153,14 +149,28 @@ def test_winning_combo_prob_scratched_boat_1st():
     assert _wcp_single([5, 0, 1]) == 0.0  # 6-1-2
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_WCP_BUG)
 def test_winning_combo_prob_scratched_boat_2nd():
     assert _wcp_single([0, 5, 1]) == 0.0  # 1-6-2
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_WCP_BUG)
 def test_winning_combo_prob_scratched_boat_3rd():
     assert _wcp_single([0, 1, 5]) == 0.0  # 1-2-6
+
+
+def test_winning_combo_prob_no_scratched_boats_unchanged():
+    p = np.array([0.42, 0.23, 0.15, 0.10, 0.06, 0.04])
+    l2, l3 = 0.85, 0.65
+    combos = [(0, 1, 2), (1, 0, 3), (2, 4, 5), (5, 3, 1)]
+    P_batch = np.tile(p, (len(combos), 1))
+    idx = np.array(combos)
+
+    actual = winning_combo_prob(P_batch, idx, l2=l2, l3=l3)
+
+    q2 = p ** l2
+    q3 = p ** l3
+    for i, (a, b, c) in enumerate(combos):
+        expected = p[a] * (q2[b] / (q2.sum() - q2[a])) * (q3[c] / (q3.sum() - q3[a] - q3[b]))
+        assert actual[i] == pytest.approx(expected, rel=1e-15)
 
 
 def test_exactly_three_runnable_boats():
