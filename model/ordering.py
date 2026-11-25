@@ -28,13 +28,17 @@ def trifecta_probs(p, l2: float = 1.0, l3: float = 1.0) -> dict[str, float]:
 
 def winning_combo_prob(P: np.ndarray, idx: np.ndarray, l2: float = 1.0, l3: float = 1.0) -> np.ndarray:
     """P: (レース数, 6) の1着確率、idx: (レース数, 3) の実際の1・2・3着（0始まり）。当たり目の確率を返す"""
+    P = np.asarray(P, dtype=float)
     r = np.arange(len(P))
     Pc = np.clip(P, 1e-12, None)
-    Q2, Q3 = Pc ** l2, Pc ** l3
+    Q2 = np.where(P > 0, np.power(Pc, l2), 0.0)
+    Q3 = np.where(P > 0, np.power(Pc, l3), 0.0)
     a, b, c = idx[:, 0], idx[:, 1], idx[:, 2]
-    second = Q2[r, b] / (Q2.sum(axis=1) - Q2[r, a])
-    third = Q3[r, c] / (Q3.sum(axis=1) - Q3[r, a] - Q3[r, b])
-    return P[r, a] * second * third
+    d2 = Q2.sum(axis=1) - Q2[r, a]
+    d3 = Q3.sum(axis=1) - Q3[r, a] - Q3[r, b]
+    second = np.where(d2 > 0, Q2[r, b] / np.where(d2 > 0, d2, 1.0), 0.0)
+    third = np.where(d3 > 0, Q3[r, c] / np.where(d3 > 0, d3, 1.0), 0.0)
+    return np.where(P[r, a] > 0, P[r, a] * second * third, 0.0)
 
 
 def fit(P: np.ndarray, idx: np.ndarray) -> tuple[float, float]:
